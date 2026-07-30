@@ -278,6 +278,19 @@ if (!function_exists('addForceWhiteEntry')) {
             $data = ($needsNl ? "\n" : '') . implode("\n", $toAppend) . "\n";
             file_put_contents($file, $data, FILE_APPEND | LOCK_EX);
             forceWhiteResetCache();
+
+            // Registra tambem no banco de bots aprendidos para que os
+            // contadores "Bots armazenados" e "IPs unicos de bots" cresçam
+            // quando o admin adiciona IPs/faixas manualmente na Force White.
+            if (function_exists('addLearnedBot')) {
+                foreach ($toAppend as $entry) {
+                    // Para faixas CIDR usa o IP base da rede (ex: 91.231.89.0)
+                    $ip = (strpos($entry, '/') !== false)
+                        ? trim(explode('/', $entry, 2)[0])
+                        : $entry;
+                    addLearnedBot($ip, 'force-white-manual', 'force_white_manual', '');
+                }
+            }
         }
 
         return ['added' => $added, 'invalid' => $invalid];
