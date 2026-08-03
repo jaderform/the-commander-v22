@@ -121,6 +121,120 @@ $visitorUA = $_SERVER['HTTP_USER_AGENT'] ?? '';
 $referer = $_SERVER['HTTP_REFERER'] ?? '';
 
 // =====================================================
+// FASE 2A: WAF - FIREWALL DE PREFIXOS DE IP (PRE-FILTRO)
+//
+// Verifica o IP do visitante contra uma lista de prefixos conhecidos
+// de Data Centers, Cloud Providers e Scrapers antes de qualquer
+// processamento mais pesado ou consulta ao banco de dados.
+//
+// Se o IP bater com algum prefixo da blacklist, o visitante e
+// redirecionado imediatamente para a White Page (pagina institucional),
+// sem consumir recursos do sistema de deteccao.
+// =====================================================
+
+/**
+ * Lista de prefixos de IP bloqueados (Cloud Data Centers / Scrapers).
+ * Adicione ou remova prefixos conforme necessario.
+ * Formato: inicio do octeto (ex: "103.136." bloqueia 103.136.x.x)
+ */
+$BLACKLISTED_IP_PREFIXES = [
+    // --- Provedores Asia / Latam / outros ---
+    "103.136.", "43.", "170.106.", "49.51.", "165.154.", "202.47.",
+    "103.173.", "103.152.", "103.24.", "101.33.", "101.36.", "101.53.",
+    "111.92.", "118.193.", "118.194.", "124.156.", "124.220.", "124.221.",
+    "129.204.", "129.226.", "139.155.",
+    // --- AWS ---
+    "3.", "18.", "34.", "35.", "44.", "52.", "54.",
+    // --- Azure ---
+    "20.", "40.",
+    // --- Google / Googlebot ---
+    "66.249.", "104.197.", "104.199.",
+    // --- DigitalOcean ---
+    "134.209.", "138.197.", "159.65.", "161.35.", "165.227.", "167.99.",
+    "167.172.", "172.233.", "206.189.", "207.154.",
+    // --- Outros Data Centers / Scrapers ---
+    "4.185.", "5.133.", "5.161.", "5.182.", "5.224.",
+    "8.211.", "8.213.", "8.228.", "8.229.", "8.234.",
+    "13.51.", "13.63.", "13.222.",
+    "14.18.", "14.192.",
+    "15.204.",
+    "17.22.", "17.241.", "17.246.",
+    "23.19.", "23.80.", "23.111.",
+    "27.125.",
+    "31.56.",
+    "32.193.", "32.194.", "32.198.", "32.199.",
+    "36.75.",
+    "37.1.", "37.111.", "37.113.",
+    "38.110.", "38.154.", "38.250.", "38.253.",
+    "39.34.", "39.48.", "39.55.", "39.60.", "39.63.",
+    "40.87.",
+    "41.56.",
+    "42.117.", "42.118.",
+    "45.9.", "45.10.", "45.39.", "45.41.", "45.45.", "45.55.", "45.56.",
+    "45.61.", "45.74.", "45.92.", "45.94.", "45.138.", "45.148.", "45.153.",
+    "45.163.", "45.168.", "45.172.", "45.174.", "45.181.", "45.182.", "45.183.",
+    "45.194.", "45.225.", "45.230.", "45.234.", "45.237.",
+    "46.17.", "46.174.",
+    "47.79.",
+    "51.75.",
+    "58.65.", "58.187.",
+    "59.14.", "59.103.",
+    "64.23.", "64.89.",
+    "67.215.",
+    "72.1.", "72.153.", "72.255.",
+    "74.7.", "74.248.",
+    "76.35.",
+    "77.74.", "77.78.", "77.83.", "77.90.",
+    "78.85.",
+    "80.9.", "80.89.", "80.246.",
+    "81.56.", "81.196.",
+    "82.22.", "82.77.", "82.156.",
+    "83.29.",
+    "84.32.", "84.55.", "84.233.",
+    "85.137.", "85.208.",
+    "86.57.",
+    "87.58.", "87.99.", "87.205.", "87.222.",
+    "88.148.", "88.164.",
+    "89.248.",
+    "91.73.", "91.92.", "91.98.", "91.134.", "91.148.", "91.207.", "91.211.",
+    "92.128.",
+    "93.123.", "93.158.",
+    "94.47.", "94.154.", "94.247.", "94.254.",
+    "95.40.", "95.181.", "95.211.",
+    "98.80.", "98.84.", "98.86.", "98.93.",
+    "99.79.",
+    "100.31.", "100.56.", "100.57.", "100.59.",
+    "102.22.",
+    "105.77.", "105.188.",
+    "106.54.", "106.161.",
+    "107.172.",
+    "108.",
+];
+
+/**
+ * Verifica se o IP do visitante inicia com algum prefixo da blacklist.
+ * Retorna true se o IP deve ser bloqueado, false caso contrario.
+ */
+$wafBlocked = false;
+foreach ($BLACKLISTED_IP_PREFIXES as $prefix) {
+    if (strncmp($visitorIP, $prefix, strlen($prefix)) === 0) {
+        $wafBlocked = true;
+        break;
+    }
+}
+
+// Se bloqueado pelo WAF, redireciona imediatamente para a White Page
+// sem executar nenhuma logica adicional do sistema.
+if ($wafBlocked) {
+    header('Location: ' . $WHITE_URL, true, 302);
+    exit;
+}
+
+// =====================================================
+// FIM DO WAF - Prossegue com a logica normal do sistema
+// =====================================================
+
+// =====================================================
 // CORRECAO PAIS: Detecta o pais AQUI no tracker.
 // O tracker esta atras do Cloudflare e recebe o visitante DIRETAMENTE,
 // entao o header CF-IPCountry aqui reflete o pais REAL do visitante.
