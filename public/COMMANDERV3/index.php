@@ -875,6 +875,8 @@ function generateTrackerCode($campaign) {
     $verifyLanguage = $campaign['verify_language'] ?? 'auto';
     // Pre-checagem JS: '0' (padrao) = decide no servidor e entrega direto (sem tela branca)
     $jsPrecheck = !empty($campaign['js_precheck']) && $campaign['js_precheck'] !== '0' ? '1' : '0';
+    // Plataforma da campanha (tiktok, google, facebook, other) - define travas nativas
+    $platform = strtolower(trim($campaign['platform'] ?? 'other'));
     
     $code = <<<'TRACKER_CODE'
 <?php
@@ -912,6 +914,33 @@ $VERIFY_LANGUAGE = '{{VERIFY_LANGUAGE}}';
 //   true           = mostra a tela "Verificando..." e coleta fingerprints JS antes de decidir.
 $JS_PRECHECK = ('{{JS_PRECHECK}}' === '1');
 $DEBUG_MODE = isset($_GET['debug']) && $_GET['debug'] === '1';
+
+// Plataforma da campanha: 'tiktok', 'google', 'facebook' ou 'other'.
+// Definida dinamicamente na criacao da campanha no painel.
+$CAMPAIGN_PLATFORM = '{{CAMPAIGN_PLATFORM}}';
+
+// ==========================================
+// TRAVA ESTRITA POR PLATAFORMA (PRE-CHECK)
+// ==========================================
+// Campanhas de TikTok Ads so aceitam visitantes acessando de CELULAR
+// e de DENTRO do aplicativo do TikTok. Qualquer acesso via desktop ou
+// navegador externo vai DIRETO para a White Page (302), antes de
+// qualquer consulta a API. As demais plataformas seguem o fluxo padrao.
+if ($CAMPAIGN_PLATFORM === 'tiktok' && !$DEBUG_MODE) {
+    $__ttUA = $_SERVER['HTTP_USER_AGENT'] ?? '';
+
+    // 1. Precisa ser dispositivo mobile (Android / iPhone / iPad / iPod)
+    $__ttIsMobile = preg_match('/(Android|iPhone|iPad|iPod)/i', $__ttUA);
+
+    // 2. Precisa vir de dentro do app do TikTok / ByteDance
+    $__ttIsInApp = preg_match('/(BytedanceWebview|TikTok|Musical_ly|Bytedance|trill|Aweme)/i', $__ttUA);
+
+    // Se NAO for mobile OU NAO vier de dentro do app -> White Page direta
+    if (!$__ttIsMobile || !$__ttIsInApp) {
+        header('Location: ' . $WHITE_URL, true, 302);
+        exit;
+    }
+}
 
 // ==========================================
 // FASE 0: NAVEGACAO INTERNA DO PROXY COM SISTEMA DE PROFUNDIDADE
@@ -2505,6 +2534,7 @@ TRACKER_CODE;
     $code = str_replace('{{BLACK_METHOD}}', $blackMethod, $code);
     $code = str_replace('{{VERIFY_LANGUAGE}}', $verifyLanguage, $code);
     $code = str_replace('{{JS_PRECHECK}}', $jsPrecheck, $code);
+    $code = str_replace('{{CAMPAIGN_PLATFORM}}', $platform, $code);
     
     return $code;
 }
