@@ -293,6 +293,8 @@ if ($isLoggedIn && isset($_POST['ajax_action'])) {
                 'abuse_challenge_enabled' => isset($_POST['abuse_challenge_enabled']) ? '1' : '0',
                 'turnstile_site_key' => trim($_POST['turnstile_site_key'] ?? ''),
                 'turnstile_secret_key' => trim($_POST['turnstile_secret_key'] ?? ''),
+                // Modo do desafio: 'managed' (invisivel, sem atrito) ou 'visible' (widget visivel)
+                'challenge_mode' => (($_POST['challenge_mode'] ?? 'managed') === 'visible') ? 'visible' : 'managed',
                 // % de humanos (que passariam) que recebem o desafio mesmo sem abuso
                 'challenge_percent' => max(0, min(100, (int)($_POST['challenge_percent'] ?? 0))),
                 'allowed_countries' => $_POST['allowed_countries'] ?? '',
@@ -1136,7 +1138,7 @@ if (!isset($_POST['_detected'])) {
 
     // Se API pede DESAFIO: exibe o Turnstile e so libera apos resolver
     if ($initialResponse && isset($initialResponse['action']) && $initialResponse['action'] === 'challenge') {
-        renderTurnstileChallenge($initialResponse['site_key'] ?? '');
+        renderTurnstileChallenge($initialResponse['site_key'] ?? '', $initialResponse['challenge_mode'] ?? 'managed');
         exit;
     }
     
@@ -1236,7 +1238,7 @@ if (!isset($_POST['_detected'])) {
         'de' => ['Uberprufung der Sicherheit der Website', 'Dies dauert nur einige Sekunden...', 'Bitte warten...'],
         'it' => ['Verifica della sicurezza del sito', 'Ci vorranno solo pochi secondi...', 'Attendere...'],
         'nl' => ['Controleren of de site veilig is', 'Dit duurt slechts enkele seconden...', 'Even geduld...'],
-        'ru' => ['Проверка ��е��опасности сайта', 'Это займет всего несколько секунд...', 'Пожалуйста, подождите...'],
+        'ru' => ['Проверка ��е��опасности сайта', 'Это займет в��его несколько секунд...', 'Пожалуйста, подождите...'],
         'tr' => ['Sitenin guvenli olup olmadigi kontrol ediliyor', 'Bu yalnizca birkac saniye surecektir...', 'Lutfen bekleyin...'],
         'ar' => ['جار التحقق من امان الموقع', 'لن يستغرق هذا سوى بضع ثوان...', 'يرجى الانتظار...'],
         'ja' => ['サイトの安全性を確認しています', 'これには数秒しかかかりません...', 'お待ちください...'],
@@ -1574,7 +1576,7 @@ if ($response && !empty($response['challenge_pass'])) {
 
 // Se API pede DESAFIO: exibe o Turnstile e so libera apos resolver
 if ($response && isset($response['action']) && $response['action'] === 'challenge') {
-    renderTurnstileChallenge($response['site_key'] ?? '');
+    renderTurnstileChallenge($response['site_key'] ?? '', $response['challenge_mode'] ?? 'managed');
     exit;
 }
 
@@ -1712,7 +1714,7 @@ function checkWithAPI($url, $data) {
  * UTMs) via parametro cmd_ts, e o fluxo normal continua — liberando para a
  * oferta apenas apos a verificacao.
  */
-function renderTurnstileChallenge($siteKey) {
+function renderTurnstileChallenge($siteKey, $mode = 'managed') {
     // Preserva a URL atual (com as UTMs) e injeta o token via cmd_ts
     $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
     $currentUrl = $scheme . '://' . ($_SERVER['HTTP_HOST'] ?? '') . ($_SERVER['REQUEST_URI'] ?? '/');
@@ -1721,6 +1723,11 @@ function renderTurnstileChallenge($siteKey) {
     $currentUrl = rtrim($currentUrl, '?&');
     $sep = (strpos($currentUrl, '?') !== false) ? '&' : '?';
     $baseUrl = $currentUrl . $sep . 'cmd_ts=';
+
+    // Modo do widget: 'visible' = normal (usuario ve a caixa), qualquer outro
+    // valor = 'invisible' (Turnstile resolve em silencio; so escala se desconfiar)
+    $tsSize = ($mode === 'visible') ? 'normal' : 'invisible';
+    $tsSizeEsc = htmlspecialchars($tsSize, ENT_QUOTES);
 
     // site key: contexto de atributo HTML -> htmlspecialchars
     $siteKeyEsc = htmlspecialchars($siteKey, ENT_QUOTES);
@@ -1757,11 +1764,12 @@ function renderTurnstileChallenge($siteKey) {
   <main class="card">
     <div class="spinner" aria-hidden="true"></div>
     <h1>Verificando seu acesso</h1>
-    <p>Confirme que voce e humano para continuar.</p>
+    <p>Aguarde um instante...</p>
     <div class="widget">
       <div class="cf-turnstile"
            data-sitekey="{$siteKeyEsc}"
            data-callback="onCmdVerified"
+           data-size="{$tsSizeEsc}"
            data-theme="dark"></div>
     </div>
   </main>
@@ -5267,6 +5275,14 @@ HTACCESS;
                             </div>
                         </div>
                         <div class="form-group" style="margin-bottom:10px;">
+                            <label>Modo do desafio</label>
+                            <select name="challenge_mode" id="campaign-challenge-mode" class="form-control">
+                                <option value="managed">Invisivel / Managed (sem atrito para humanos)</option>
+                                <option value="visible">Visivel (mostra o widget "Verificando...")</option>
+                            </select>
+                            <small style="color:var(--muted);font-size:12px;">Invisivel: humano real passa sem ver captcha e so aparece interacao se a Cloudflare desconfiar. A protecao contra bots e identica nos dois modos.</small>
+                        </div>
+                        <div class="form-group" style="margin-bottom:10px;">
                             <label>% de humanos desafiados</label>
                             <input type="number" min="0" max="100" name="challenge_percent" id="campaign-challenge-percent" class="form-control" value="30" placeholder="30">
                             <small style="color:var(--muted);font-size:12px;">Ex.: 30 = 30% dos humanos que passariam recebem o desafio (alem dos casos de abuso). 0 = so em abuso.</small>
@@ -6869,6 +6885,8 @@ function openCampaignModal(campaign = null) {
         document.getElementById('campaign-turnstile-site-key').value = campaign?.turnstile_site_key || '';
         document.getElementById('campaign-turnstile-secret-key').value = campaign?.turnstile_secret_key || '';
         document.getElementById('campaign-challenge-percent').value = campaign?.challenge_percent ?? 30;
+        var chModeEl = document.getElementById('campaign-challenge-mode');
+        if (chModeEl) chModeEl.value = (campaign?.challenge_mode === 'visible') ? 'visible' : 'managed';
     }
     document.getElementById('campaign-ml-enabled').checked = campaign?.ml_enabled !== '0' && campaign?.ml_enabled !== false;
     document.getElementById('campaign-tls-fp-enabled').checked = campaign?.tls_fp_enabled !== '0' && campaign?.tls_fp_enabled !== false;

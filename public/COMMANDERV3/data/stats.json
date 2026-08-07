@@ -1,6 +1,6 @@
 {
-    "total_clicks": 107666,
-    "total_blocks": 89216,
+    "total_clicks": 107670,
+    "total_blocks": 89220,
     "total_passes": 18450,
     "by_campaign": {
         "unknown": {
@@ -268,6 +268,27 @@
             "passes": 2,
             "conversions": 0,
             "revenue": 0
+        },
+        "CMVIS": {
+            "clicks": 2,
+            "blocks": 2,
+            "passes": 0,
+            "conversions": 0,
+            "revenue": 0
+        },
+        "CMMAN": {
+            "clicks": 1,
+            "blocks": 1,
+            "passes": 0,
+            "conversions": 0,
+            "revenue": 0
+        },
+        "CMDEF": {
+            "clicks": 1,
+            "blocks": 1,
+            "passes": 0,
+            "conversions": 0,
+            "revenue": 0
         }
     },
     "by_date": {
@@ -352,8 +373,8 @@
             "passes": 54
         },
         "2026-08-07": {
-            "clicks": 433,
-            "blocks": 60,
+            "clicks": 437,
+            "blocks": 64,
             "passes": 373
         }
     },
@@ -369,8 +390,8 @@
             "passes": 458
         },
         "tiktok": {
-            "clicks": 20423,
-            "blocks": 2515,
+            "clicks": 20427,
+            "blocks": 2519,
             "passes": 17908
         },
         "facebook": {

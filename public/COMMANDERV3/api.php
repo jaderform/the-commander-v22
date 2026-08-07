@@ -1050,6 +1050,7 @@ class CommanderAPI {
                         'status' => 'success',
                         'action' => 'challenge',
                         'site_key' => $tsSiteKey,
+                        'challenge_mode' => (($campaign['challenge_mode'] ?? 'managed') === 'visible') ? 'visible' : 'managed',
                         'timestamp' => $timestamp,
                         'request_id' => bin2hex(random_bytes(8))
                     ]);

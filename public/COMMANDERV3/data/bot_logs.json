@@ -1,5 +1,81 @@
 [
     {
+        "timestamp": "2026-08-07 13:36:46",
+        "ip": "200.1.1.9",
+        "ua": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/120 Mobile Safari\/537.36",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign_id": "CMVIS",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
+        "timestamp": "2026-08-07 13:36:46",
+        "ip": "200.1.1.9",
+        "user_agent": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/120 Mobile Safari\/537.36",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign": "cm-visible",
+        "campaign_id": "CMVIS",
+        "platform": "tiktok",
+        "referer": "https:\/\/www.tiktok.com\/"
+    },
+    {
+        "timestamp": "2026-08-07 13:36:22",
+        "ip": "200.1.1.3",
+        "ua": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/120 Mobile Safari\/537.36",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign_id": "CMDEF",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
+        "timestamp": "2026-08-07 13:36:22",
+        "ip": "200.1.1.3",
+        "user_agent": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/120 Mobile Safari\/537.36",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign": "cm-default",
+        "campaign_id": "CMDEF",
+        "platform": "tiktok",
+        "referer": "https:\/\/www.tiktok.com\/"
+    },
+    {
+        "timestamp": "2026-08-07 13:36:22",
+        "ip": "200.1.1.2",
+        "ua": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/120 Mobile Safari\/537.36",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign_id": "CMMAN",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
+        "timestamp": "2026-08-07 13:36:22",
+        "ip": "200.1.1.2",
+        "user_agent": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/120 Mobile Safari\/537.36",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign": "cm-managed",
+        "campaign_id": "CMMAN",
+        "platform": "tiktok",
+        "referer": "https:\/\/www.tiktok.com\/"
+    },
+    {
+        "timestamp": "2026-08-07 13:36:22",
+        "ip": "200.1.1.1",
+        "ua": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/120 Mobile Safari\/537.36",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign_id": "CMVIS",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
+        "timestamp": "2026-08-07 13:36:22",
+        "ip": "200.1.1.1",
+        "user_agent": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/120 Mobile Safari\/537.36",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign": "cm-visible",
+        "campaign_id": "CMVIS",
+        "platform": "tiktok",
+        "referer": "https:\/\/www.tiktok.com\/"
+    },
+    {
         "timestamp": "2026-08-07 12:04:58",
         "ip": "200.200.10.11",
         "ua": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/120 Mobile Safari\/537.36",
@@ -9419,90 +9495,6 @@
         "reason": "Acesso sem UTMs - enviado para WHITE",
         "campaign": "cmp-sutia",
         "campaign_id": "camp_b1a8827f6c129149",
-        "platform": "other",
-        "referer": ""
-    },
-    {
-        "timestamp": "2026-06-04 22:53:10",
-        "ip": "2001:bc8:701:51:da5e:d3ff:fe49:8e1c",
-        "ua": "Mozilla\/5.0 (X11; Linux x86_64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/134.0.0.0 Safari\/537.3",
-        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
-        "campaign_id": "camp_b1a8827f6c129149",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:07",
-        "ip": "1.196.165.8",
-        "ua": "User-Agent:Mozilla\/5.0 (Windows NT 6.1; WOW64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/50.0.2661.102 Safari\/537.36",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "unknown",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:07",
-        "ip": "1.196.165.8",
-        "user_agent": "User-Agent:Mozilla\/5.0 (Windows NT 6.1; WOW64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/50.0.2661.102 Safari\/537.36",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "regularformabrasil-lat",
-        "campaign_id": "unknown",
-        "platform": "other",
-        "referer": "https:\/\/www.regularformabrasil.lat\/"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:07",
-        "ip": "1.196.165.8",
-        "ua": "User-Agent:Mozilla\/5.0 (Windows NT 6.1; WOW64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/50.0.2661.102 Safari\/537.36",
-        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
-        "campaign_id": "regularformabrasil-lat",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:07",
-        "ip": "2001:bc8:701:51:da5e:d3ff:fe49:8e1c",
-        "ua": "Mozilla\/5.0 (X11; Linux x86_64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/134.0.0.0 Safari\/537.3",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_b1a8827f6c129149",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:07",
-        "ip": "2001:bc8:701:51:da5e:d3ff:fe49:8e1c",
-        "user_agent": "Mozilla\/5.0 (X11; Linux x86_64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/134.0.0.0 Safari\/537.3",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "cmp-sutia",
-        "campaign_id": "camp_b1a8827f6c129149",
-        "platform": "other",
-        "referer": ""
-    },
-    {
-        "timestamp": "2026-06-04 22:53:07",
-        "ip": "2001:bc8:701:51:da5e:d3ff:fe49:8e1c",
-        "ua": "Mozilla\/5.0 (X11; Linux x86_64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/134.0.0.0 Safari\/537.3",
-        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
-        "campaign_id": "camp_b1a8827f6c129149",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:07",
-        "ip": "104.23.223.37",
-        "ua": "http:\/\/ingresseprovaesa.online\/wp-admin\/install.php?step=1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_1af4800edb383617",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:07",
-        "ip": "104.23.223.37",
-        "user_agent": "http:\/\/ingresseprovaesa.online\/wp-admin\/install.php?step=1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "ingresseprovaesa-online",
-        "campaign_id": "camp_1af4800edb383617",
         "platform": "other",
         "referer": ""
     }
