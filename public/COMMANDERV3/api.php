@@ -511,6 +511,62 @@ class CommanderAPI {
         }
         
         // =====================================================
+        // HORARIO DE PAUSA (White Mode / Agendamento)
+        // =====================================================
+        // Quando ativado, DENTRO da janela [inicio, fim] (no fuso da campanha)
+        // TODO o trafego vai para a White Page - a campanha fica "pausada".
+        // Suporta janelas que cruzam a meia-noite (ex.: 23:30 -> 06:00).
+        // Aplica-se a todos (inclusive whitelist) para refletir a pausa real.
+        // =====================================================
+        if (($campaign['schedule_enabled'] ?? '0') === '1') {
+            $schedTz    = $campaign['schedule_timezone'] ?? 'America/Sao_Paulo';
+            $schedStart = $campaign['schedule_start'] ?? '23:30';
+            $schedEnd   = $campaign['schedule_end'] ?? '06:00';
+
+            try {
+                $schedNow = new DateTime('now', new DateTimeZone($schedTz));
+            } catch (Exception $e) {
+                $schedNow = new DateTime('now');
+            }
+            $nowMinutes = (int)$schedNow->format('H') * 60 + (int)$schedNow->format('i');
+
+            $toMinutes = function ($hhmm) {
+                $p = explode(':', (string)$hhmm);
+                return ((int)($p[0] ?? 0)) * 60 + ((int)($p[1] ?? 0));
+            };
+            $startMin = $toMinutes($schedStart);
+            $endMin   = $toMinutes($schedEnd);
+
+            // Janela normal (start < end) OU que vira a meia-noite (start > end)
+            $inPauseWindow = ($startMin <= $endMin)
+                ? ($nowMinutes >= $startMin && $nowMinutes < $endMin)
+                : ($nowMinutes >= $startMin || $nowMinutes < $endMin);
+
+            if ($inPauseWindow) {
+                $this->logBotAccess($visitorIP, $visitorUA, "Horario de pausa ativo ({$schedStart}-{$schedEnd}) -> White Page", $campaignId, $utmSource, $platform);
+                recordHourlyClick(true);
+                recordClick($campaignId, true, $platform);
+                logBot([
+                    'ip' => $visitorIP,
+                    'user_agent' => substr($visitorUA, 0, 200),
+                    'reason' => "Horario de pausa ({$schedStart}-{$schedEnd})",
+                    'result' => 'schedule_pause',
+                    'campaign' => $campaignSlug,
+                    'campaign_id' => $campaignId,
+                    'platform' => $platform,
+                    'referer' => ''
+                ]);
+                jsonResponse([
+                    'action'   => 'white',
+                    'url'      => $campaign['white_url'] ?? '',
+                    'redirect' => $campaign['white_url'] ?? '',
+                    'method'   => $campaign['white_method'] ?? 'redirect',
+                    'reason'   => 'schedule_pause'
+                ]);
+            }
+        }
+
+        // =====================================================
         // WARM-UP: Aquecimento da Campanha
         // =====================================================
         // Se a campanha tem cliques de aquecimento configurados
@@ -541,37 +597,11 @@ class CommanderAPI {
             }
         }
 
-        // =====================================================
-        // DIVISAO DE TRAFEGO (Traffic Split)
-        // =====================================================
-        // Se ativada na campanha, uma % configuravel dos visitantes vai
-        // aleatoriamente para a White Page e o restante permanece no fluxo de
-        // analise (deteccao de bot normal). IPs em whitelist (Admin/Testes) sao
-        // ignorados para nao atrapalhar os testes.
-        // =====================================================
-        $trafficSplit = $campaign['traffic_split'] ?? '0';
-        $trafficSplitEnabled = ($trafficSplit === '1' || $trafficSplit === 1 || $trafficSplit === true);
-        if ($trafficSplitEnabled && !$isWhitelisted) {
-            // Porcentagem configuravel (padrao 20). Limitada entre 1 e 100.
-            $splitPercent = (int)($campaign['traffic_split_percent'] ?? 20);
-            $splitPercent = max(1, min(100, $splitPercent));
-            // random_int(1,100) <= X%  =>  X% de chance de ir para a White Page
-            if (random_int(1, 100) <= $splitPercent) {
-                $this->logBotAccess($visitorIP, $visitorUA, "Divisao de trafego: {$splitPercent}% -> White Page", $campaignId, $utmSource, $platform);
-                recordHourlyClick(false);
-                recordClick($campaignId, false, $platform);
-
-                jsonResponse([
-                    'action' => 'white',
-                    'url' => $campaign['white_url'] ?? '',
-                    'redirect' => $campaign['white_url'] ?? '',
-                    'method' => $campaign['white_method'] ?? 'redirect',
-                    'traffic_split' => true,
-                    'reason' => 'traffic_split_20'
-                ]);
-            }
-            // 80% restantes seguem normalmente para o fluxo de analise abaixo
-        }
+        // NOTA: A DIVISAO DE TRAFEGO (Traffic Split) foi movida para DEPOIS da
+        // deteccao de bots (mais abaixo). Antes ela rodava aqui, no inicio, e a
+        // fatia que "continuava" acabava sendo mandada para a white pelas regras
+        // de desktop/sem-UTM, mascarando a divisao. Agora ela so afeta humanos
+        // reais (isBot=false), tornando a % observavel e correta.
 
         // =====================================================
         // FILTRO DE PAISES
@@ -834,6 +864,30 @@ class CommanderAPI {
             $riskScore = 100;
         }
         
+        // =====================================================
+        // DIVISAO DE TRAFEGO (Traffic Split) - APLICADA AO HUMANO REAL
+        // =====================================================
+        // Posicionada DEPOIS de toda a deteccao: so afeta visitantes que
+        // passariam para a BLACK (isBot=false, humano real). Uma % configuravel
+        // deles e desviada para a White Page; o restante segue para a oferta.
+        // Assim a divisao e observavel e nao e mascarada pelas regras de
+        // desktop / sem-UTM que rodam antes. Whitelist (Admin/Teste) e ignorada.
+        // =====================================================
+        $trafficSplit = $campaign['traffic_split'] ?? '0';
+        $trafficSplitEnabled = in_array($trafficSplit, ['1', 1, true], true);
+        if (!$isBot && !$isWhitelisted && $trafficSplitEnabled) {
+            $splitPercent = (int)($campaign['traffic_split_percent'] ?? 20);
+            $splitPercent = max(1, min(100, $splitPercent));
+            // random_int(1,100) <= X%  =>  X% dos humanos vao para a White Page
+            if (random_int(1, 100) <= $splitPercent) {
+                // Roteia para WHITE reaproveitando todo o fluxo abaixo
+                // (metricas, log e montagem da resposta ja tratam isBot=true).
+                $isBot = true;
+                $riskScore = 100;
+                $blockReason = "Divisao de trafego: {$splitPercent}% -> White Page";
+            }
+        }
+
         // ========== REGISTRO E METRICAS ==========
         $advancedData = [
             'risk_score' => $riskScore,
@@ -922,13 +976,25 @@ class CommanderAPI {
                 $tsToken = $this->requestData['cf_turnstile_response'] ?? '';
                 if ($tsToken !== '' && function_exists('verifyTurnstile')) {
                     $tsResult = verifyTurnstile($tsToken, $tsSecretKey, $visitorIP);
-                    if (!empty($tsResult['success'])) {
+
+                    // Falha de REDE no servidor (VPS nao conseguiu falar com a
+                    // Cloudflare: erro de SSL/CA, timeout, etc.) NAO pode punir um
+                    // humano que comprovadamente resolveu o widget no navegador.
+                    // Nesse caso aceitamos o solve para nao mandar o humano para a
+                    // white indevidamente. So uma rejeicao EXPLICITA da Cloudflare
+                    // (success=false com resposta valida) mantem o visitante barrado.
+                    $networkError = in_array(($tsResult['error'] ?? ''), ['request_failed', 'missing_params'], true);
+
+                    if (!empty($tsResult['success']) || $networkError) {
                         $hasValidPass = true;
                         // Emite passe curto para nao desafiar de novo nas proximas etapas
                         if (function_exists('makeChallengePass')) {
                             $challengePassValue = makeChallengePass($visitorIP);
                         }
-                        $this->logBotAccess($visitorIP, $visitorUA, 'Desafio Turnstile resolvido -> liberado', $campaignId, $utmSource, $platform);
+                        $motivo = !empty($tsResult['success'])
+                            ? 'Desafio Turnstile resolvido -> liberado'
+                            : 'Desafio Turnstile: verificacao offline (rede) -> liberado';
+                        $this->logBotAccess($visitorIP, $visitorUA, $motivo, $campaignId, $utmSource, $platform);
                     }
                 }
             }
@@ -1373,6 +1439,8 @@ class CommanderAPI {
             strpos($reason, 'sem UTMs') === false &&
             strpos($reason, 'Desktop detectado') === false &&
             strpos($reason, 'Divisao de trafego') === false &&
+            strpos($reason, 'Horario de pausa') === false &&
+            strpos($reason, 'Desafio Turnstile') === false &&
             strpos($reason, 'Visitante real') === false &&
             strpos($reason, 'BLACK') === false) {
             addLearnedBot($ip, $userAgent, $reason, $campaignId);
