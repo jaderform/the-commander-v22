@@ -511,6 +511,124 @@ class CommanderAPI {
         }
         
         // =====================================================
+        // WAF: FIREWALL DE PREFIXOS DE IP (Data Centers / Scrapers)
+        // =====================================================
+        // Se o IP do visitante bate com um prefixo conhecido de cloud/bot,
+        // vai direto para a White Page. Rodando AQUI (e nao no tracker), o
+        // bloqueio fica REGISTRADO em Logs de Bots e IPs de teste (whitelist)
+        // sao ignorados, permitindo testar a black normalmente.
+        // =====================================================
+        if (!$isWhitelisted) {
+            $wafPrefixes = [
+                // ByteDance / TikTok Ads
+                "103.136.", "43.", "170.106.", "49.51.", "165.154.", "202.47.",
+                "103.173.", "103.152.", "103.24.", "101.33.", "101.36.", "101.53.",
+                "111.92.", "118.193.", "118.194.", "124.156.", "124.220.", "124.221.",
+                "129.204.", "129.226.", "139.155.", "122.161.", "202.181.", "223.233.",
+                "39.109.", "113.31.",
+                // AWS
+                "3.", "18.", "34.", "35.", "44.", "52.", "54.", "50.19.", "13.219.", "13.223.", "100.26.",
+                // Azure / Oracle
+                "20.", "40.", "140.245.", "172.161.",
+                // Google / Cloudflare WARP
+                "66.249.", "66.102.", "104.197.", "104.199.", "104.28.",
+                // DigitalOcean
+                "134.209.", "138.197.", "159.65.", "159.89.", "161.35.", "165.227.", "167.99.",
+                "167.172.", "172.233.", "206.189.", "207.154.",
+                // Outros Data Centers / Scrapers
+                "4.184.", "4.185.", "5.9.", "5.83.", "5.133.", "5.161.", "5.182.", "5.224.",
+                "8.211.", "8.213.", "8.228.", "8.229.", "8.234.",
+                "13.51.", "13.63.", "13.222.", "14.18.", "14.192.", "15.204.",
+                "17.22.", "17.241.", "17.246.", "23.19.", "23.80.", "23.111.", "27.125.", "31.56.",
+                "32.193.", "32.194.", "32.195.", "32.197.", "32.198.", "32.199.",
+                "36.75.", "37.1.", "37.111.", "37.113.", "38.110.", "38.154.", "38.250.", "38.253.",
+                "39.34.", "39.48.", "39.55.", "39.60.", "39.63.", "40.87.", "41.56.", "42.117.", "42.118.",
+                "45.9.", "45.10.", "45.39.", "45.41.", "45.45.", "45.55.", "45.56.",
+                "45.61.", "45.74.", "45.88.", "45.92.", "45.94.", "45.138.", "45.148.", "45.153.",
+                "45.163.", "45.168.", "45.172.", "45.174.", "45.181.", "45.182.", "45.183.",
+                "45.194.", "45.225.", "45.230.", "45.234.", "45.237.",
+                "46.17.", "46.174.", "47.79.", "47.87.", "47.236.", "51.75.", "57.128.",
+                "58.65.", "58.187.", "59.14.", "59.103.", "62.197.", "64.23.", "64.89.",
+                "67.215.", "68.221.", "72.1.", "72.153.", "72.255.", "74.7.", "74.179.", "74.248.", "76.35.",
+                "77.74.", "77.78.", "77.83.", "77.90.", "78.85.", "80.9.", "80.89.", "80.246.",
+                "81.56.", "81.196.", "82.22.", "82.77.", "82.156.", "83.29.", "84.32.", "84.55.", "84.233.",
+                "85.137.", "85.208.", "86.57.", "87.58.", "87.99.", "87.205.", "87.222.",
+                "88.148.", "88.164.", "89.248.",
+                "91.73.", "91.92.", "91.98.", "91.134.", "91.148.", "91.207.", "91.211.", "91.224.",
+                "92.128.", "93.123.", "93.158.", "94.47.", "94.154.", "94.247.", "94.254.",
+                "95.40.", "95.181.", "95.211.", "98.80.", "98.84.", "98.86.", "98.91.", "98.93.", "99.79.",
+                "100.31.", "100.56.", "100.57.", "100.59.", "102.22.", "105.77.", "105.188.",
+                "106.54.", "106.161.", "107.172.", "107.174.", "108.", "109.205.",
+                "119.252.", "130.12.", "138.199.", "138.201.", "141.148.", "154.36.", "157.143.",
+                "158.158.", "168.144.", "170.246.", "170.254.", "172.105.", "178.156.", "185.92.",
+                "185.225.", "192.210.", "192.255.", "195.70.", "195.178.", "204.101.", "209.54.",
+                "213.188.", "216.194.", "216.251.", "216.73.",
+                // IPv6 de bots
+                "2a06:98c0:", "2a03:2880:", "2001:41d0:", "2a04:c300:", "2a09:bac1:",
+                "2001:818:", "2600:3000:", "2404:9dc0:", "2a01:4f9:"
+            ];
+            foreach ($wafPrefixes as $pfx) {
+                if (strncmp($visitorIP, $pfx, strlen($pfx)) === 0) {
+                    $this->logBotAccess($visitorIP, $visitorUA, "WAF: IP de datacenter/bot ({$pfx}*) -> White Page", $campaignId, $utmSource, $platform);
+                    recordHourlyClick(true);
+                    recordClick($campaignId, true, $platform);
+                    logBot([
+                        'ip' => $visitorIP,
+                        'user_agent' => substr($visitorUA, 0, 200),
+                        'reason' => "WAF: IP de datacenter ({$pfx}*)",
+                        'result' => 'white',
+                        'campaign' => $campaignSlug,
+                        'campaign_id' => $campaignId,
+                        'platform' => $platform,
+                        'referer' => ''
+                    ]);
+                    jsonResponse([
+                        'action'   => 'white',
+                        'url'      => $campaign['white_url'] ?? '',
+                        'redirect' => $campaign['white_url'] ?? '',
+                        'method'   => $campaign['white_method'] ?? 'redirect',
+                        'reason'   => 'waf_datacenter'
+                    ]);
+                }
+            }
+        }
+
+        // =====================================================
+        // TRAVA DE PLATAFORMA: TikTok = so mobile + dentro do app
+        // =====================================================
+        // Campanhas com plataforma 'tiktok' so aceitam visitantes de CELULAR e
+        // de DENTRO do app do TikTok/ByteDance. Desktop ou navegador externo ->
+        // White Page. Fica REGISTRADO e IPs de teste (whitelist) sao ignorados.
+        // =====================================================
+        if (!$isWhitelisted && ($campaign['platform'] ?? '') === 'tiktok') {
+            $ttIsMobile = preg_match('/(Android|iPhone|iPad|iPod)/i', $visitorUA);
+            $ttIsInApp  = preg_match('/(BytedanceWebview|TikTok|Musical_ly|Bytedance|trill|Aweme)/i', $visitorUA);
+            if (!$ttIsMobile || !$ttIsInApp) {
+                $motivo = !$ttIsMobile ? 'nao-mobile' : 'fora do app TikTok';
+                $this->logBotAccess($visitorIP, $visitorUA, "TikTok: acesso {$motivo} -> White Page", $campaignId, $utmSource, $platform);
+                recordHourlyClick(true);
+                recordClick($campaignId, true, $platform);
+                logBot([
+                    'ip' => $visitorIP,
+                    'user_agent' => substr($visitorUA, 0, 200),
+                    'reason' => "TikTok: acesso {$motivo}",
+                    'result' => 'white',
+                    'campaign' => $campaignSlug,
+                    'campaign_id' => $campaignId,
+                    'platform' => $platform,
+                    'referer' => ''
+                ]);
+                jsonResponse([
+                    'action'   => 'white',
+                    'url'      => $campaign['white_url'] ?? '',
+                    'redirect' => $campaign['white_url'] ?? '',
+                    'method'   => $campaign['white_method'] ?? 'redirect',
+                    'reason'   => 'tiktok_platform_lock'
+                ]);
+            }
+        }
+
+        // =====================================================
         // HORARIO DE PAUSA (White Mode / Agendamento)
         // =====================================================
         // Quando ativado, DENTRO da janela [inicio, fim] (no fuso da campanha)

@@ -1,5 +1,109 @@
 [
     {
+        "timestamp": "2026-08-07 13:54:58",
+        "ip": "45.61.10.99",
+        "ua": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "Visitante real -> BLACK (oferta)",
+        "campaign_id": "WAFG",
+        "utm_source": "google",
+        "platform": "google"
+    },
+    {
+        "timestamp": "2026-08-07 13:54:58",
+        "ip": "45.61.10.99",
+        "user_agent": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "[PASSOU] Score: 0",
+        "campaign": "waf-google",
+        "campaign_id": "WAFG",
+        "platform": "google",
+        "referer": ""
+    },
+    {
+        "timestamp": "2026-08-07 13:54:41",
+        "ip": "179.62.10.20",
+        "ua": "Mozilla\/5.0 (Linux; Android 13) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36 BytedanceWebview\/d8a21c6 TikTok",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign_id": "WAFT",
+        "utm_source": "google",
+        "platform": "google"
+    },
+    {
+        "timestamp": "2026-08-07 13:54:41",
+        "ip": "179.62.10.20",
+        "user_agent": "Mozilla\/5.0 (Linux; Android 13) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36 BytedanceWebview\/d8a21c6 TikTok",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign": "waf-tiktok",
+        "campaign_id": "WAFT",
+        "platform": "google",
+        "referer": "https:\/\/google.com\/"
+    },
+    {
+        "timestamp": "2026-08-07 13:54:41",
+        "ip": "179.61.10.20",
+        "user_agent": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "TikTok: acesso nao-mobile",
+        "campaign": "waf-tiktok",
+        "campaign_id": "WAFT",
+        "platform": "google",
+        "referer": ""
+    },
+    {
+        "timestamp": "2026-08-07 13:54:41",
+        "ip": "179.61.10.20",
+        "ua": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "TikTok: acesso nao-mobile -> White Page",
+        "campaign_id": "WAFT",
+        "utm_source": "google",
+        "platform": "google"
+    },
+    {
+        "timestamp": "2026-08-07 13:54:41",
+        "ip": "179.60.10.20",
+        "ua": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
+        "campaign_id": "WAFG",
+        "utm_source": "google",
+        "platform": "google"
+    },
+    {
+        "timestamp": "2026-08-07 13:54:41",
+        "ip": "179.60.10.20",
+        "user_agent": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
+        "campaign": "waf-google",
+        "campaign_id": "WAFG",
+        "platform": "google",
+        "referer": "https:\/\/google.com\/"
+    },
+    {
+        "timestamp": "2026-08-07 13:54:41",
+        "ip": "179.60.10.20",
+        "ua": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
+        "campaign_id": "WAFG",
+        "utm_source": "google",
+        "platform": "google"
+    },
+    {
+        "timestamp": "2026-08-07 13:54:41",
+        "ip": "45.61.10.20",
+        "user_agent": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "WAF: IP de datacenter (45.61.*)",
+        "campaign": "waf-google",
+        "campaign_id": "WAFG",
+        "platform": "google",
+        "referer": ""
+    },
+    {
+        "timestamp": "2026-08-07 13:54:41",
+        "ip": "45.61.10.20",
+        "ua": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "WAF: IP de datacenter\/bot (45.61.*) -> White Page",
+        "campaign_id": "WAFG",
+        "utm_source": "google",
+        "platform": "google"
+    },
+    {
         "timestamp": "2026-08-07 13:36:46",
         "ip": "200.1.1.9",
         "ua": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/120 Mobile Safari\/537.36",
@@ -9394,108 +9498,5 @@
         "campaign_id": "camp_aab379b9fff22846",
         "utm_source": "google",
         "platform": "google"
-    },
-    {
-        "timestamp": "2026-06-04 22:54:42",
-        "ip": "66.249.88.4",
-        "ua": "Chrome Privacy Preserving Prefetch Proxy",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_aab379b9fff22846",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:54:42",
-        "ip": "66.249.88.4",
-        "user_agent": "Chrome Privacy Preserving Prefetch Proxy",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "wl-mechanism-us-broad-02jun",
-        "campaign_id": "camp_aab379b9fff22846",
-        "platform": "other",
-        "referer": ""
-    },
-    {
-        "timestamp": "2026-06-04 22:54:42",
-        "ip": "66.249.88.4",
-        "ua": "Chrome Privacy Preserving Prefetch Proxy",
-        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
-        "campaign_id": "camp_aab379b9fff22846",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:18",
-        "ip": "104.23.221.76",
-        "ua": "http:\/\/primeirahabilita.click\/wp-admin\/install.php?step=1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_9f64a2ead64f8970",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:18",
-        "ip": "104.23.221.76",
-        "user_agent": "http:\/\/primeirahabilita.click\/wp-admin\/install.php?step=1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "primeirahabilita-click",
-        "campaign_id": "camp_9f64a2ead64f8970",
-        "platform": "other",
-        "referer": ""
-    },
-    {
-        "timestamp": "2026-06-04 22:53:18",
-        "ip": "104.23.221.76",
-        "ua": "http:\/\/primeirahabilita.click\/wp-admin\/install.php?step=1",
-        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
-        "campaign_id": "camp_9f64a2ead64f8970",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:11",
-        "ip": "2001:bc8:701:51:da5e:d3ff:fe49:8e1c",
-        "ua": "Mozilla\/5.0 (X11; Linux x86_64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/134.0.0.0 Safari\/537.3",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_b1a8827f6c129149",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:11",
-        "ip": "2001:bc8:701:51:da5e:d3ff:fe49:8e1c",
-        "user_agent": "Mozilla\/5.0 (X11; Linux x86_64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/134.0.0.0 Safari\/537.3",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "cmp-sutia",
-        "campaign_id": "camp_b1a8827f6c129149",
-        "platform": "other",
-        "referer": ""
-    },
-    {
-        "timestamp": "2026-06-04 22:53:11",
-        "ip": "2001:bc8:701:51:da5e:d3ff:fe49:8e1c",
-        "ua": "Mozilla\/5.0 (X11; Linux x86_64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/134.0.0.0 Safari\/537.3",
-        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
-        "campaign_id": "camp_b1a8827f6c129149",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:10",
-        "ip": "2001:bc8:701:51:da5e:d3ff:fe49:8e1c",
-        "ua": "Mozilla\/5.0 (X11; Linux x86_64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/134.0.0.0 Safari\/537.3",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_b1a8827f6c129149",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:53:10",
-        "ip": "2001:bc8:701:51:da5e:d3ff:fe49:8e1c",
-        "user_agent": "Mozilla\/5.0 (X11; Linux x86_64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/134.0.0.0 Safari\/537.3",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "cmp-sutia",
-        "campaign_id": "camp_b1a8827f6c129149",
-        "platform": "other",
-        "referer": ""
     }
 ]
