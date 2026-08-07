@@ -1,7 +1,7 @@
 {
-    "total_clicks": 107233,
-    "total_blocks": 89156,
-    "total_passes": 18077,
+    "total_clicks": 107666,
+    "total_blocks": 89216,
+    "total_passes": 18450,
     "by_campaign": {
         "unknown": {
             "clicks": 12245,
@@ -233,6 +233,41 @@
             "passes": 26,
             "conversions": 0,
             "revenue": 0
+        },
+        "ITPAUSE": {
+            "clicks": 1,
+            "blocks": 1,
+            "passes": 0,
+            "conversions": 0,
+            "revenue": 0
+        },
+        "ITPAUSEOFF": {
+            "clicks": 1,
+            "blocks": 1,
+            "passes": 0,
+            "conversions": 0,
+            "revenue": 0
+        },
+        "ITSPLIT": {
+            "clicks": 309,
+            "blocks": 58,
+            "passes": 251,
+            "conversions": 0,
+            "revenue": 0
+        },
+        "ITPLAIN": {
+            "clicks": 120,
+            "blocks": 0,
+            "passes": 120,
+            "conversions": 0,
+            "revenue": 0
+        },
+        "ITCHAL": {
+            "clicks": 2,
+            "blocks": 0,
+            "passes": 2,
+            "conversions": 0,
+            "revenue": 0
         }
     },
     "by_date": {
@@ -315,6 +350,11 @@
             "clicks": 3758,
             "blocks": 3704,
             "passes": 54
+        },
+        "2026-08-07": {
+            "clicks": 433,
+            "blocks": 60,
+            "passes": 373
         }
     },
     "by_platform": {
@@ -329,9 +369,9 @@
             "passes": 458
         },
         "tiktok": {
-            "clicks": 19990,
-            "blocks": 2455,
-            "passes": 17535
+            "clicks": 20423,
+            "blocks": 2515,
+            "passes": 17908
         },
         "facebook": {
             "clicks": 21,
