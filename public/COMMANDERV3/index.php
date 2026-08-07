@@ -683,6 +683,9 @@ if ($isLoggedIn && isset($_POST['ajax_action'])) {
             break;
             
         case 'clean_logs':
+            if (!$isAdmin) {
+                jsonResponse(['error' => 'Apenas admin', 'success' => false], 403);
+            }
             $days = (int) ($_POST['days'] ?? 30);
             cleanOldLogs($days);
             jsonResponse(['success' => true]);
@@ -4550,12 +4553,14 @@ HTACCESS;
                     <button class="btn btn-primary btn-sm" onclick="exportLogs()">
                         <i class="fas fa-file-export"></i> Exportar CSV
                     </button>
+                    <?php if ($isAdmin): ?>
                     <button class="btn btn-secondary btn-sm" onclick="clearLearnedBots()" title="Zera a lista de bots aprendidos (resolve IP real marcado por engano)">
                         <i class="fas fa-brain"></i> Limpar Bots Aprendidos
                     </button>
                     <button class="btn btn-danger btn-sm" onclick="cleanLogs()">
                         <i class="fas fa-trash"></i> Limpar Logs Antigos
                     </button>
+                    <?php endif; ?>
                 </div>
             </div>
             
