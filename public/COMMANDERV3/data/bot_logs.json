@@ -1,5 +1,176 @@
 [
     {
+        "timestamp": "2026-08-07 13:59:51",
+        "ip": "179.60.9.77",
+        "ua": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign_id": "TTON",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:51",
+        "ip": "179.60.9.77",
+        "user_agent": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign": "tt-on",
+        "campaign_id": "TTON",
+        "platform": "tiktok",
+        "referer": "https:\/\/www.tiktok.com\/"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.108",
+        "ua": "Mozilla\/5.0 (Linux; Android 13) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36 BytedanceWebview TikTok",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign_id": "TTDEF",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.108",
+        "user_agent": "Mozilla\/5.0 (Linux; Android 13) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36 BytedanceWebview TikTok",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign": "tt-def",
+        "campaign_id": "TTDEF",
+        "platform": "tiktok",
+        "referer": "https:\/\/www.tiktok.com\/"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.107",
+        "user_agent": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36",
+        "reason": "TikTok: acesso fora do app TikTok",
+        "campaign": "tt-def",
+        "campaign_id": "TTDEF",
+        "platform": "tiktok",
+        "referer": ""
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.107",
+        "ua": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36",
+        "reason": "TikTok: acesso fora do app TikTok -> White Page",
+        "campaign_id": "TTDEF",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.106",
+        "ua": "Mozilla\/5.0 (Linux; Android 13) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36 BytedanceWebview TikTok",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign_id": "TTOFF",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.106",
+        "user_agent": "Mozilla\/5.0 (Linux; Android 13) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36 BytedanceWebview TikTok",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign": "tt-off",
+        "campaign_id": "TTOFF",
+        "platform": "tiktok",
+        "referer": "https:\/\/www.tiktok.com\/"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.105",
+        "user_agent": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36",
+        "reason": "TikTok: acesso fora do app TikTok",
+        "campaign": "tt-off",
+        "campaign_id": "TTOFF",
+        "platform": "tiktok",
+        "referer": ""
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.105",
+        "ua": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36",
+        "reason": "TikTok: acesso fora do app TikTok -> White Page",
+        "campaign_id": "TTOFF",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.104",
+        "user_agent": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "TikTok: acesso nao-mobile",
+        "campaign": "tt-off",
+        "campaign_id": "TTOFF",
+        "platform": "tiktok",
+        "referer": ""
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.104",
+        "ua": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "TikTok: acesso nao-mobile -> White Page",
+        "campaign_id": "TTOFF",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.103",
+        "ua": "Mozilla\/5.0 (Linux; Android 13) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36 BytedanceWebview TikTok",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign_id": "TTON",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.103",
+        "user_agent": "Mozilla\/5.0 (Linux; Android 13) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36 BytedanceWebview TikTok",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign": "tt-on",
+        "campaign_id": "TTON",
+        "platform": "tiktok",
+        "referer": "https:\/\/www.tiktok.com\/"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.102",
+        "ua": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign_id": "TTON",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.102",
+        "user_agent": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36",
+        "reason": "Bot conhecido detectado: puppeteer_default",
+        "campaign": "tt-on",
+        "campaign_id": "TTON",
+        "platform": "tiktok",
+        "referer": "https:\/\/www.tiktok.com\/"
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.101",
+        "user_agent": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "TikTok: acesso nao-mobile",
+        "campaign": "tt-on",
+        "campaign_id": "TTON",
+        "platform": "tiktok",
+        "referer": ""
+    },
+    {
+        "timestamp": "2026-08-07 13:59:35",
+        "ip": "179.60.5.101",
+        "ua": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
+        "reason": "TikTok: acesso nao-mobile -> White Page",
+        "campaign_id": "TTON",
+        "utm_source": "tiktok",
+        "platform": "tiktok"
+    },
+    {
         "timestamp": "2026-08-07 13:54:58",
         "ip": "45.61.10.99",
         "ua": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 Chrome\/120 Safari\/537.36",
@@ -9328,175 +9499,5 @@
         "campaign_id": "camp_25a1be8d9db12591",
         "platform": "other",
         "referer": "http:\/\/www.carteirabrasilia.biz"
-    },
-    {
-        "timestamp": "2026-06-04 22:59:58",
-        "ip": "185.130.227.201",
-        "ua": "Mozilla\/5.0 (Linux; Android 9; Redmi Note 8T) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/84.0.4147.125 Mobile Safari\/537.36",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "unknown",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:59:58",
-        "ip": "185.130.227.201",
-        "user_agent": "Mozilla\/5.0 (Linux; Android 9; Redmi Note 8T) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/84.0.4147.125 Mobile Safari\/537.36",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "spinformabr-click",
-        "campaign_id": "unknown",
-        "platform": "other",
-        "referer": ""
-    },
-    {
-        "timestamp": "2026-06-04 22:59:11",
-        "ip": "162.158.182.186",
-        "ua": "http:\/\/inscricaomilitaresa.online\/wp-admin\/install.php?step=1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_d917726756467605",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:59:11",
-        "ip": "162.158.182.186",
-        "user_agent": "http:\/\/inscricaomilitaresa.online\/wp-admin\/install.php?step=1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "inscricaomilitaresa-online",
-        "campaign_id": "camp_d917726756467605",
-        "platform": "other",
-        "referer": ""
-    },
-    {
-        "timestamp": "2026-06-04 22:59:11",
-        "ip": "162.158.182.186",
-        "ua": "http:\/\/inscricaomilitaresa.online\/wp-admin\/install.php?step=1",
-        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
-        "campaign_id": "camp_d917726756467605",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:58:57",
-        "ip": "162.158.183.32",
-        "ua": "http:\/\/ingresseprovaesa.online\/wp-admin\/install.php?step=1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_1af4800edb383617",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:58:57",
-        "ip": "162.158.183.32",
-        "user_agent": "http:\/\/ingresseprovaesa.online\/wp-admin\/install.php?step=1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "ingresseprovaesa-online",
-        "campaign_id": "camp_1af4800edb383617",
-        "platform": "other",
-        "referer": ""
-    },
-    {
-        "timestamp": "2026-06-04 22:58:57",
-        "ip": "162.158.183.32",
-        "ua": "http:\/\/ingresseprovaesa.online\/wp-admin\/install.php?step=1",
-        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
-        "campaign_id": "camp_1af4800edb383617",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:56:43",
-        "ip": "173.87.169.64",
-        "ua": "Mozilla\/5.0 (Linux; Android 10; K) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/148.0.0.0 Mobile Safari\/537.36",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_aab379b9fff22846",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:56:43",
-        "ip": "173.87.169.64",
-        "user_agent": "Mozilla\/5.0 (Linux; Android 10; K) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/148.0.0.0 Mobile Safari\/537.36",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "wl-mechanism-us-broad-02jun",
-        "campaign_id": "camp_aab379b9fff22846",
-        "platform": "other",
-        "referer": "https:\/\/morningglowco.site\/"
-    },
-    {
-        "timestamp": "2026-06-04 22:56:40",
-        "ip": "173.87.169.64",
-        "user_agent": "Mozilla\/5.0 (Linux; Android 10; K) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/148.0.0.0 Mobile Safari\/537.36",
-        "reason": "[PASSOU] Score: 0",
-        "campaign": "wl-mechanism-us-broad-02jun",
-        "campaign_id": "camp_aab379b9fff22846",
-        "platform": "google",
-        "referer": "https:\/\/morningglowco.site\/?utm_source=google&amp;utm_medium=cpc&amp;utm_campaign=23896760796&amp;utm_content=811434656829&amp;utm_term=gelatin%20trick&amp;gclid=CjwKCAjwxITRBhBYEiwA6mZm7STUAf3ikv1xqX"
-    },
-    {
-        "timestamp": "2026-06-04 22:56:37",
-        "ip": "173.87.169.64",
-        "user_agent": "Mozilla\/5.0 (Linux; Android 10; K) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/148.0.0.0 Mobile Safari\/537.36",
-        "reason": "[PASSOU] Score: 0",
-        "campaign": "wl-mechanism-us-broad-02jun",
-        "campaign_id": "camp_aab379b9fff22846",
-        "platform": "google",
-        "referer": "https:\/\/www.google.com\/"
-    },
-    {
-        "timestamp": "2026-06-04 22:55:33",
-        "ip": "104.23.217.160",
-        "ua": "http:\/\/inscricaomilitaresa.online\/wp-admin\/install.php?step=1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_d917726756467605",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:55:33",
-        "ip": "104.23.217.160",
-        "user_agent": "http:\/\/inscricaomilitaresa.online\/wp-admin\/install.php?step=1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "inscricaomilitaresa-online",
-        "campaign_id": "camp_d917726756467605",
-        "platform": "other",
-        "referer": ""
-    },
-    {
-        "timestamp": "2026-06-04 22:55:33",
-        "ip": "104.23.217.160",
-        "ua": "http:\/\/inscricaomilitaresa.online\/wp-admin\/install.php?step=1",
-        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
-        "campaign_id": "camp_d917726756467605",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 22:54:43",
-        "ip": "2001:4860:7:1103::d6",
-        "ua": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/148.0.0.0 Safari\/537.36",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_aab379b9fff22846",
-        "utm_source": "google",
-        "platform": "google"
-    },
-    {
-        "timestamp": "2026-06-04 22:54:43",
-        "ip": "2001:4860:7:1103::d6",
-        "user_agent": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/148.0.0.0 Safari\/537.36",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "wl-mechanism-us-broad-02jun",
-        "campaign_id": "camp_aab379b9fff22846",
-        "platform": "google",
-        "referer": "https:\/\/www.google.com\/"
-    },
-    {
-        "timestamp": "2026-06-04 22:54:43",
-        "ip": "2001:4860:7:1103::d6",
-        "ua": "Mozilla\/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit\/537.36 (KHTML, like Gecko) Chrome\/148.0.0.0 Safari\/537.36",
-        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
-        "campaign_id": "camp_aab379b9fff22846",
-        "utm_source": "google",
-        "platform": "google"
     }
 ]

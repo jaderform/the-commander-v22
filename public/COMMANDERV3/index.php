@@ -284,6 +284,9 @@ if ($isLoggedIn && isset($_POST['ajax_action'])) {
                 'white_method' => $_POST['white_method'] ?? 'redirect',
                 'black_method' => $_POST['black_method'] ?? 'redirect',
                 'platform' => $_POST['platform'] ?? 'other',
+                // Modo teste TikTok: '1' = permite testar pelo celular SEM abrir pelo app do TikTok
+                // (basta ser mobile + parametros corretos). Desligado = so funciona dentro do app.
+                'tiktok_test_mode' => isset($_POST['tiktok_test_mode']) ? '1' : '0',
                 'status' => $_POST['status'] ?? 'active',
                 'warmup_clicks' => max(0, (int)($_POST['warmup_clicks'] ?? 0)),
                 // Divisao de Trafego: % configuravel para White Page, restante para o fluxo de analise
@@ -4805,7 +4808,7 @@ HTACCESS;
                 <div class="grid-2">
                     <div class="form-group">
                         <label>Plataforma</label>
-                        <select name="platform" id="campaign-platform" class="form-control">
+                        <select name="platform" id="campaign-platform" class="form-control" onchange="toggleTiktokTestModeRow()">
                             <option value="tiktok">TikTok Ads</option>
                             <option value="facebook">Facebook/Meta Ads</option>
                             <option value="google">Google Ads</option>
@@ -4820,6 +4823,23 @@ HTACCESS;
                             <option value="active">Ativo</option>
                             <option value="paused">Pausado</option>
                         </select>
+                    </div>
+                </div>
+
+                <!-- Modo Teste TikTok: aparece somente quando a plataforma for TikTok -->
+                <div class="form-group" id="tiktok-test-mode-row" style="margin-bottom:15px;display:none;">
+                    <div style="display:flex;align-items:center;justify-content:space-between;padding:12px;background:var(--darker);border-radius:8px;">
+                        <div style="display:flex;align-items:center;gap:12px;">
+                            <i class="fas fa-vial" style="color:var(--warning);font-size:20px;"></i>
+                            <div>
+                                <div style="font-weight:600;color:var(--light);">Modo Teste (TikTok)</div>
+                                <div style="font-size:12px;color:var(--muted);">Permite testar pelo celular em qualquer navegador (sem abrir pelo app do TikTok). Deixe DESLIGADO em producao: assim so libera dentro do app do TikTok.</div>
+                            </div>
+                        </div>
+                        <label class="switch">
+                            <input type="checkbox" name="tiktok_test_mode" id="campaign-tiktok-test-mode">
+                            <span class="slider"></span>
+                        </label>
                     </div>
                 </div>
                 
@@ -6734,6 +6754,10 @@ function openCampaignModal(campaign = null) {
     populateCampaignDomains(campaign?.domain || '');
     document.getElementById('campaign-platform').value = campaign?.platform || 'tiktok';
     document.getElementById('campaign-status').value = campaign?.status || 'active';
+    // Modo Teste TikTok
+    var ttTestEl = document.getElementById('campaign-tiktok-test-mode');
+    if (ttTestEl) ttTestEl.checked = campaign?.tiktok_test_mode === '1' || campaign?.tiktok_test_mode === true;
+    toggleTiktokTestModeRow();
     document.getElementById('campaign-white-url').value = campaign?.white_url || '';
     document.getElementById('campaign-white-method').value = campaign?.white_method || 'redirect';
     document.getElementById('campaign-black-url').value = campaign?.black_url || '';
@@ -7291,6 +7315,15 @@ function toggleAbuseChallengeSettings() {
     const settings = document.getElementById('abuse-challenge-settings');
     if (checkbox && settings) {
         settings.style.display = checkbox.checked ? 'block' : 'none';
+    }
+}
+
+// Mostra a linha "Modo Teste (TikTok)" apenas quando a plataforma for TikTok
+function toggleTiktokTestModeRow() {
+    const plat = document.getElementById('campaign-platform');
+    const row = document.getElementById('tiktok-test-mode-row');
+    if (plat && row) {
+        row.style.display = (plat.value === 'tiktok') ? 'block' : 'none';
     }
 }
 

@@ -603,7 +603,12 @@ class CommanderAPI {
         if (!$isWhitelisted && ($campaign['platform'] ?? '') === 'tiktok') {
             $ttIsMobile = preg_match('/(Android|iPhone|iPad|iPod)/i', $visitorUA);
             $ttIsInApp  = preg_match('/(BytedanceWebview|TikTok|Musical_ly|Bytedance|trill|Aweme)/i', $visitorUA);
-            if (!$ttIsMobile || !$ttIsInApp) {
+            // MODO TESTE: quando ligado, basta ser mobile (nao exige o app do TikTok),
+            // permitindo testar pelo celular em qualquer navegador com os parametros.
+            // Desligado (padrao): exige mobile E dentro do app do TikTok, como em producao.
+            $ttTestMode = ($campaign['tiktok_test_mode'] ?? '0') === '1';
+            $ttBlocked  = $ttTestMode ? !$ttIsMobile : (!$ttIsMobile || !$ttIsInApp);
+            if ($ttBlocked) {
                 $motivo = !$ttIsMobile ? 'nao-mobile' : 'fora do app TikTok';
                 $this->logBotAccess($visitorIP, $visitorUA, "TikTok: acesso {$motivo} -> White Page", $campaignId, $utmSource, $platform);
                 recordHourlyClick(true);
