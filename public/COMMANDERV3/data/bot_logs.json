@@ -1,5 +1,90 @@
 [
     {
+        "timestamp": "2026-08-07 21:17:26",
+        "ip": "127.0.0.1",
+        "ua": "curl\/8.17.0",
+        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
+        "campaign_id": "unknown",
+        "utm_source": "",
+        "platform": "other"
+    },
+    {
+        "timestamp": "2026-08-07 21:17:26",
+        "ip": "127.0.0.1",
+        "user_agent": "curl\/8.17.0",
+        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
+        "campaign": "nao-existe-999",
+        "campaign_id": "unknown",
+        "platform": "other",
+        "referer": ""
+    },
+    {
+        "timestamp": "2026-08-07 21:17:26",
+        "ip": "127.0.0.1",
+        "ua": "curl\/8.17.0",
+        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
+        "campaign_id": "nao-existe-999",
+        "utm_source": "",
+        "platform": "other"
+    },
+    {
+        "timestamp": "2026-08-07 21:17:26",
+        "ip": "45.61.99.99",
+        "user_agent": "curl\/8.17.0",
+        "reason": "WAF: IP de datacenter (45.61.*)",
+        "campaign": "xxx",
+        "campaign_id": "camp_c1138a78bc10f596",
+        "platform": "other",
+        "referer": ""
+    },
+    {
+        "timestamp": "2026-08-07 21:17:26",
+        "ip": "45.61.99.99",
+        "ua": "curl\/8.17.0",
+        "reason": "WAF: IP de datacenter\/bot (45.61.*) -> White Page",
+        "campaign_id": "camp_c1138a78bc10f596",
+        "utm_source": "",
+        "platform": "other"
+    },
+    {
+        "timestamp": "2026-08-07 21:17:26",
+        "ip": "179.100.50.11",
+        "user_agent": "Googlebot\/2.1",
+        "reason": "TikTok: acesso nao-mobile",
+        "campaign": "xxx",
+        "campaign_id": "camp_c1138a78bc10f596",
+        "platform": "other",
+        "referer": ""
+    },
+    {
+        "timestamp": "2026-08-07 21:17:26",
+        "ip": "179.100.50.11",
+        "ua": "Googlebot\/2.1",
+        "reason": "TikTok: acesso nao-mobile -> White Page",
+        "campaign_id": "camp_c1138a78bc10f596",
+        "utm_source": "",
+        "platform": "other"
+    },
+    {
+        "timestamp": "2026-08-07 21:17:26",
+        "ip": "179.100.50.10",
+        "user_agent": "curl\/8.17.0",
+        "reason": "TikTok: acesso nao-mobile",
+        "campaign": "xxx",
+        "campaign_id": "camp_c1138a78bc10f596",
+        "platform": "other",
+        "referer": ""
+    },
+    {
+        "timestamp": "2026-08-07 21:17:26",
+        "ip": "179.100.50.10",
+        "ua": "curl\/8.17.0",
+        "reason": "TikTok: acesso nao-mobile -> White Page",
+        "campaign_id": "camp_c1138a78bc10f596",
+        "utm_source": "",
+        "platform": "other"
+    },
+    {
         "timestamp": "2026-08-07 13:59:51",
         "ip": "179.60.9.77",
         "ua": "Mozilla\/5.0 (Linux; Android 13; SM-G991B) AppleWebKit\/537.36 Chrome\/120 Mobile Safari\/537.36",
@@ -9414,43 +9499,5 @@
         "campaign_id": "camp_0e1f81503469037f",
         "platform": "other",
         "referer": "http:\/\/www.ingressehabilitacao.click"
-    },
-    {
-        "timestamp": "2026-06-04 23:00:25",
-        "ip": "43.164.129.191",
-        "ua": "Mozilla\/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit\/605.1.15 (KHTML, like Gecko) Version\/13.0.3 Mobile\/15E148 Safari\/604.1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_65cf7722c859f360",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 23:00:25",
-        "ip": "43.164.129.191",
-        "user_agent": "Mozilla\/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit\/605.1.15 (KHTML, like Gecko) Version\/13.0.3 Mobile\/15E148 Safari\/604.1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "centraldarenovacao-lat",
-        "campaign_id": "camp_65cf7722c859f360",
-        "platform": "other",
-        "referer": "http:\/\/www.centraldarenovacao.lat"
-    },
-    {
-        "timestamp": "2026-06-04 23:00:22",
-        "ip": "43.131.32.36",
-        "ua": "Mozilla\/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit\/605.1.15 (KHTML, like Gecko) Version\/13.0.3 Mobile\/15E148 Safari\/604.1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_75046cd67f7d90b2",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 23:00:22",
-        "ip": "43.131.32.36",
-        "user_agent": "Mozilla\/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit\/605.1.15 (KHTML, like Gecko) Version\/13.0.3 Mobile\/15E148 Safari\/604.1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "informebrasilia-click",
-        "campaign_id": "camp_75046cd67f7d90b2",
-        "platform": "other",
-        "referer": "http:\/\/www.informebrasilia.click"
     }
 ]

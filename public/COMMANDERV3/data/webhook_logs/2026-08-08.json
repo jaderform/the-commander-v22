@@ -1,0 +1,11 @@
+[
+    {
+        "timestamp": "2026-08-08 00:17:42",
+        "gateway": "unknown",
+        "data": {
+            "gateway": ""
+        },
+        "result": "gateway_not_supported",
+        "ip": "127.0.0.1"
+    }
+]
