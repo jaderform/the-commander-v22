@@ -9452,52 +9452,5 @@
         "campaign_id": "camp_75046cd67f7d90b2",
         "platform": "other",
         "referer": "http:\/\/www.informebrasilia.click"
-    },
-    {
-        "timestamp": "2026-06-04 23:00:14",
-        "ip": "172.70.240.87",
-        "ua": "http:\/\/hippogriff.sbs\/wp-admin\/install.php?step=1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_45fb99197c6076d2",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 23:00:14",
-        "ip": "172.70.240.87",
-        "user_agent": "http:\/\/hippogriff.sbs\/wp-admin\/install.php?step=1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "hippogriff-sbs",
-        "campaign_id": "camp_45fb99197c6076d2",
-        "platform": "other",
-        "referer": ""
-    },
-    {
-        "timestamp": "2026-06-04 23:00:14",
-        "ip": "172.70.240.87",
-        "ua": "http:\/\/hippogriff.sbs\/wp-admin\/install.php?step=1",
-        "reason": "Desktop detectado - enviado para WHITE (apenas mobile passa)",
-        "campaign_id": "camp_45fb99197c6076d2",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 23:00:02",
-        "ip": "175.178.110.121",
-        "ua": "Mozilla\/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit\/605.1.15 (KHTML, like Gecko) Version\/13.0.3 Mobile\/15E148 Safari\/604.1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign_id": "camp_25a1be8d9db12591",
-        "utm_source": "",
-        "platform": "other"
-    },
-    {
-        "timestamp": "2026-06-04 23:00:02",
-        "ip": "175.178.110.121",
-        "user_agent": "Mozilla\/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit\/605.1.15 (KHTML, like Gecko) Version\/13.0.3 Mobile\/15E148 Safari\/604.1",
-        "reason": "Acesso sem UTMs - enviado para WHITE",
-        "campaign": "carteirabrasilia-biz",
-        "campaign_id": "camp_25a1be8d9db12591",
-        "platform": "other",
-        "referer": "http:\/\/www.carteirabrasilia.biz"
     }
 ]
