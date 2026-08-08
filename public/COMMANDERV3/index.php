@@ -6869,7 +6869,29 @@ async function deleteCampaign(id) {
 // Guarda os logs carregados para permitir a exportacao em CSV
 let currentLogs = [];
 
+// Resolve SEMPRE o nome amigavel da campanha de um log.
+// Tenta casar por campaign_id, depois por slug (campo 'campaign').
+// Se a campanha nao existir mais, mostra o slug/id cru; so em ultimo
+// caso ('vazio') retorna um rotulo explicito - assim nunca fica so "-".
+function campaignLabel(log) {
+    const id = log.campaign_id || '';
+    const slug = log.campaign || '';
+    let match = null;
+    if (id) match = campaigns.find(c => c.id === id);
+    if (!match && slug) match = campaigns.find(c => c.slug === slug || c.id === slug);
+    if (match && match.name) return match.name;
+    if (slug) return slug;
+    if (id) return id;
+    return 'Sem campanha';
+}
+
 async function loadLogs() {
+    // Garante que a lista de campanhas ja esteja carregada para conseguir
+    // resolver o NOME da campanha de cada log (e nao so o slug/id).
+    if (!campaigns || !campaigns.length) {
+        try { await loadCampaigns(); } catch (e) {}
+    }
+
     const result = await apiCall('get_bot_logs', { limit: 2000 });
     if (!result || !result.logs) return;
     
@@ -6883,15 +6905,15 @@ async function loadLogs() {
     
     tbody.innerHTML = result.logs.map(log => {
         // Visitantes reais (BLACK / oferta) em verde; bloqueios/WHITE em vermelho
-        const reason = log.reason || '';
-        const isBlack = /BLACK|Visitante real/i.test(reason);
+        const reason = log.reason || 'Sem motivo registrado';
+        const isBlack = /BLACK|Visitante real|PASSOU/i.test(reason);
         const badgeClass = isBlack ? 'badge-success' : 'badge-danger';
         return `
         <tr>
             <td>${escapeHtml(log.timestamp)}</td>
             <td><code>${escapeHtml(log.ip)}</code></td>
             <td><span class="badge ${badgeClass}">${escapeHtml(reason)}</span></td>
-            <td>${escapeHtml(log.campaign || '-')}</td>
+            <td><strong>${escapeHtml(campaignLabel(log))}</strong></td>
             <td><span class="platform-badge platform-${log.platform || 'other'}">${log.platform || 'unknown'}</span></td>
             <td>
                 <div class="actions">
@@ -6920,8 +6942,8 @@ function exportLogs() {
     const rows = currentLogs.map(log => [
         escapeCsv(log.timestamp),
         escapeCsv(log.ip),
-        escapeCsv(log.reason),
-        escapeCsv(log.campaign || '-'),
+        escapeCsv(log.reason || 'Sem motivo registrado'),
+        escapeCsv(campaignLabel(log)),
         escapeCsv(log.platform || 'unknown')
     ].join(','));
 
