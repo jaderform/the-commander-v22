@@ -909,6 +909,149 @@ function getBotLogs($limit = 100, $offset = 0) {
 
 /**
  * ============================================
+ * WAF: APRENDIZADO AUTOMATICO DE PREFIXOS (DNS REVERSO)
+ * ============================================
+ * Quando um IP nao bate em nenhum prefixo conhecido (lista fixa nem lista
+ * aprendida), o sistema tenta descobrir via DNS reverso (PTR) se aquele IP
+ * pertence a ByteDance/TikTok ou a um provedor de nuvem/datacenter. Se
+ * identificar, o prefixo (ex: "45.61.") e salvo automaticamente em
+ * FILE_WAF_LEARNED - assim, da proxima vez, o bloqueio e instantaneo
+ * (sem precisar de DNS de novo e sem voce precisar cadastrar na mao).
+ */
+
+/**
+ * Calcula o "prefixo" de um IP no mesmo formato usado na lista do WAF
+ * (2 primeiros octetos para IPv4, 2 primeiros grupos para IPv6).
+ */
+function wafPrefixFromIP($ip) {
+    if (strpos($ip, ':') !== false) {
+        $parts = array_slice(explode(':', $ip), 0, 2);
+        return implode(':', $parts) . ':';
+    }
+    $parts = explode('.', $ip);
+    if (count($parts) < 2) {
+        return $ip . '.';
+    }
+    return $parts[0] . '.' . $parts[1] . '.';
+}
+
+/**
+ * Retorna apenas os prefixos (strings) ja aprendidos, para mesclar com a
+ * lista fixa do WAF antes de checar o IP do visitante.
+ */
+function getWafLearnedPrefixes() {
+    $entries = readJsonFile(FILE_WAF_LEARNED, []);
+    if (!is_array($entries)) return [];
+    return array_values(array_unique(array_filter(array_column($entries, 'prefix'))));
+}
+
+/**
+ * Retorna as entradas completas (com hostname/motivo/data) para exibicao
+ * no painel, mais recentes primeiro.
+ */
+function getWafLearnedEntries() {
+    $entries = readJsonFile(FILE_WAF_LEARNED, []);
+    if (!is_array($entries)) return [];
+    return array_reverse($entries);
+}
+
+/**
+ * Salva um novo prefixo aprendido (se ainda nao existir) e retorna o
+ * prefixo calculado para esse IP.
+ */
+function learnWafPrefix($ip, $hostname, $keyword) {
+    $entries = readJsonFile(FILE_WAF_LEARNED, []);
+    if (!is_array($entries)) $entries = [];
+
+    $prefix = wafPrefixFromIP($ip);
+
+    foreach ($entries as $e) {
+        if (($e['prefix'] ?? '') === $prefix) {
+            return $prefix; // ja aprendido, nao duplica
+        }
+    }
+
+    $entries[] = [
+        'prefix' => $prefix,
+        'ip' => $ip,
+        'hostname' => $hostname,
+        'keyword' => $keyword,
+        'date' => date('Y-m-d H:i:s')
+    ];
+
+    // Limita a 500 prefixos aprendidos (evita crescimento infinito)
+    if (count($entries) > 500) {
+        $entries = array_slice($entries, -500);
+    }
+
+    writeJsonFile(FILE_WAF_LEARNED, $entries);
+    return $prefix;
+}
+
+/**
+ * Remove um prefixo aprendido manualmente (usado pelo painel, caso algum
+ * IP tenha sido aprendido por engano).
+ */
+function removeWafLearnedPrefix($prefix) {
+    $entries = readJsonFile(FILE_WAF_LEARNED, []);
+    if (!is_array($entries)) return false;
+    $entries = array_filter($entries, function($e) use ($prefix) {
+        return ($e['prefix'] ?? '') !== $prefix;
+    });
+    return writeJsonFile(FILE_WAF_LEARNED, array_values($entries));
+}
+
+/**
+ * Tenta identificar, via DNS reverso (PTR), se o IP pertence a
+ * ByteDance/TikTok ou a um provedor de nuvem/datacenter conhecido.
+ * Retorna ['hostname' => ..., 'keyword' => ...] se identificar, ou null.
+ *
+ * So deve ser chamada para IPs que NAO bateram em nenhum prefixo (fixo ou
+ * aprendido) - ou seja, roda raramente. Usa timeout curto para nao travar
+ * a requisicao caso o DNS nao responda.
+ */
+function detectDatacenterByReverseDNS($ip) {
+    if (!filter_var($ip, FILTER_VALIDATE_IP)) return null;
+
+    $oldTimeout = ini_get('default_socket_timeout');
+    ini_set('default_socket_timeout', 2);
+    $hostname = @gethostbyaddr($ip);
+    ini_set('default_socket_timeout', $oldTimeout);
+
+    if (!$hostname || $hostname === $ip) return null;
+
+    $hostname = strtolower($hostname);
+
+    // Palavras-chave de PTR conhecidas de ByteDance/TikTok e dos principais
+    // provedores de nuvem/datacenter usados por bots e scrapers.
+    $keywords = [
+        // ByteDance / TikTok
+        'bytedance', 'byteoversea', 'ttgslb', 'tiktokv', 'tiktokcdn',
+        'isnssdk', 'musical.ly', 'toutiao', 'ibytedtos',
+        // Big clouds
+        'amazonaws', 'awsglobalaccelerator', 'googleusercontent', '1e100.net',
+        'googlebot', '.google.', '.google', 'azure', 'microsoft', 'cloudapp.net',
+        'oraclecloud', 'oraclevcn',
+        // Provedores de VPS/datacenter comuns em trafego de bot
+        'ovh.net', 'ovh.ca', 'hetzner.com', 'hetzner.de', 'digitalocean',
+        'linode.com', 'akamai', 'vultr.com', 'choopa', 'colocrossing',
+        'racknerd', 'hostwinds', 'contabo.net', 'scaleway.com', 'online.net',
+        'leaseweb', 'psychz', 'quadranet',
+        // China cloud
+        'alibaba', 'aliyuncs', 'aliyun', 'tencent', 'myqcloud',
+    ];
+
+    foreach ($keywords as $kw) {
+        if (strpos($hostname, $kw) !== false) {
+            return ['hostname' => $hostname, 'keyword' => $kw];
+        }
+    }
+
+    return null;
+}
+
+/**
+ * ============================================
  * FUNÇÕES DE CAMPANHAS
  * ============================================
  */

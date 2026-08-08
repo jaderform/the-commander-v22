@@ -519,7 +519,7 @@ class CommanderAPI {
         // sao ignorados, permitindo testar a black normalmente.
         // =====================================================
         if (!$isWhitelisted) {
-            $_WAF_PREFIXES = [
+            $wafPrefixes = [
     // --- ByteDance / TikTok Ads ---
     "103.136.", "43.", "170.106.", "49.51.", "165.154.", "202.47.",
     "103.173.", "103.152.", "103.24.", "101.33.", "101.36.", "101.53.",
@@ -614,29 +614,76 @@ class CommanderAPI {
     "2a06:98c0:", "2a03:2880:", "2001:41d0:", "2a04:c300:", "2a09:bac1:",
     "2001:818:", "2600:3000:", "2404:9dc0:", "2a01:4f9:"
 ];
+            // Mescla com os prefixos APRENDIDOS AUTOMATICAMENTE (via DNS reverso)
+            // guardados em data/waf_learned_prefixes.json - assim IPs que ja
+            // foram identificados uma vez sao bloqueados instantaneamente,
+            // sem precisar cadastrar na mao nem repetir a consulta de DNS.
+            $wafPrefixes = array_merge($wafPrefixes, getWafLearnedPrefixes());
+
+            $wafHit = null;
             foreach ($wafPrefixes as $pfx) {
                 if (strncmp($visitorIP, $pfx, strlen($pfx)) === 0) {
-                    $this->logBotAccess($visitorIP, $visitorUA, "WAF: IP de datacenter/bot ({$pfx}*) -> White Page", $campaignId, $utmSource, $platform);
-                    recordHourlyClick(true);
-                    recordClick($campaignId, true, $platform);
-                    logBot([
-                        'ip' => $visitorIP,
-                        'user_agent' => substr($visitorUA, 0, 200),
-                        'reason' => "WAF: IP de datacenter ({$pfx}*)",
-                        'result' => 'white',
-                        'campaign' => $campaignSlug,
-                        'campaign_id' => $campaignId,
-                        'platform' => $platform,
-                        'referer' => ''
-                    ]);
-                    jsonResponse([
-                        'action'   => 'white',
-                        'url'      => $campaign['white_url'] ?? '',
-                        'redirect' => $campaign['white_url'] ?? '',
-                        'method'   => $campaign['white_method'] ?? 'redirect',
-                        'reason'   => 'waf_datacenter'
-                    ]);
+                    $wafHit = $pfx;
+                    break;
                 }
+            }
+
+            if ($wafHit !== null) {
+                $this->logBotAccess($visitorIP, $visitorUA, "WAF: IP de datacenter/bot ({$wafHit}*) -> White Page", $campaignId, $utmSource, $platform);
+                recordHourlyClick(true);
+                recordClick($campaignId, true, $platform);
+                logBot([
+                    'ip' => $visitorIP,
+                    'user_agent' => substr($visitorUA, 0, 200),
+                    'reason' => "WAF: IP de datacenter ({$wafHit}*)",
+                    'result' => 'white',
+                    'campaign' => $campaignSlug,
+                    'campaign_id' => $campaignId,
+                    'platform' => $platform,
+                    'referer' => ''
+                ]);
+                jsonResponse([
+                    'action'   => 'white',
+                    'url'      => $campaign['white_url'] ?? '',
+                    'redirect' => $campaign['white_url'] ?? '',
+                    'method'   => $campaign['white_method'] ?? 'redirect',
+                    'reason'   => 'waf_datacenter'
+                ]);
+            }
+
+            // =====================================================
+            // AUTO-DETECCAO: DNS reverso para bots/datacenters desconhecidos
+            // =====================================================
+            // Se o IP NAO bateu em nenhum prefixo (fixo ou aprendido), tenta
+            // identificar via DNS reverso (PTR) se pertence a ByteDance/TikTok
+            // ou a um provedor de nuvem/datacenter. Se identificar, BLOQUEIA
+            // e SALVA o prefixo automaticamente na lista aprendida - nas
+            // proximas visitas desse mesmo bloco de IP, o bloqueio e
+            // instantaneo, sem precisar de DNS de novo e sem cadastro manual.
+            // =====================================================
+            $autoDetect = detectDatacenterByReverseDNS($visitorIP);
+            if ($autoDetect) {
+                $learnedPrefix = learnWafPrefix($visitorIP, $autoDetect['hostname'], $autoDetect['keyword']);
+                $this->logBotAccess($visitorIP, $visitorUA, "WAF Auto: PTR '{$autoDetect['hostname']}' -> prefixo {$learnedPrefix} aprendido -> White Page", $campaignId, $utmSource, $platform);
+                recordHourlyClick(true);
+                recordClick($campaignId, true, $platform);
+                logBot([
+                    'ip' => $visitorIP,
+                    'user_agent' => substr($visitorUA, 0, 200),
+                    'reason' => "WAF Auto (DNS reverso): {$autoDetect['hostname']} [{$autoDetect['keyword']}] -> prefixo {$learnedPrefix} aprendido",
+                    'result' => 'white',
+                    'campaign' => $campaignSlug,
+                    'campaign_id' => $campaignId,
+                    'platform' => $platform,
+                    'referer' => ''
+                ]);
+                jsonResponse([
+                    'action'   => 'white',
+                    'url'      => $campaign['white_url'] ?? '',
+                    'redirect' => $campaign['white_url'] ?? '',
+                    'method'   => $campaign['white_method'] ?? 'redirect',
+                    'reason'   => 'waf_datacenter_auto'
+                ]);
             }
         }
 

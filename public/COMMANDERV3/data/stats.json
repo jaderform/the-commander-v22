@@ -1,6 +1,6 @@
 {
-    "total_clicks": 107686,
-    "total_blocks": 89235,
+    "total_clicks": 107689,
+    "total_blocks": 89238,
     "total_passes": 18451,
     "by_campaign": {
         "unknown": {
@@ -333,8 +333,8 @@
             "revenue": 0
         },
         "camp_c1138a78bc10f596": {
-            "clicks": 1,
-            "blocks": 1,
+            "clicks": 4,
+            "blocks": 4,
             "passes": 0,
             "conversions": 0,
             "revenue": 0
@@ -422,8 +422,8 @@
             "passes": 54
         },
         "2026-08-07": {
-            "clicks": 453,
-            "blocks": 79,
+            "clicks": 456,
+            "blocks": 82,
             "passes": 374
         }
     },
@@ -434,8 +434,8 @@
             "passes": 84
         },
         "google": {
-            "clicks": 637,
-            "blocks": 178,
+            "clicks": 640,
+            "blocks": 181,
             "passes": 459
         },
         "tiktok": {

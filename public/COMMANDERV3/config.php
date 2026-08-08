@@ -266,12 +266,17 @@ define('FILE_URL_ROTATION', DATA_DIR . 'url_rotation.json');
 define('FILE_ADVANCED_STATS', DATA_DIR . 'advanced_stats.json');
 define('FILE_HOURLY_STATS', DATA_DIR . 'hourly_stats.json');
 
+// Prefixos de IP aprendidos automaticamente pelo WAF via DNS reverso
+// (ByteDance/TikTok/datacenters detectados sozinhos, sem cadastro manual)
+define('FILE_WAF_LEARNED', DATA_DIR . 'waf_learned_prefixes.json');
+
 // Criar arquivos padrao das melhorias
 $newDefaultFiles = [
     FILE_WEBHOOKS => '{"telegram":{"enabled":false,"bot_token":"","chat_id":""},"discord":{"enabled":false,"url":""}}',
     FILE_URL_ROTATION => '{}',
     FILE_ADVANCED_STATS => '{"by_hour":{},"js_challenges":{"passed":0,"failed":0},"fingerprints":{}}',
-    FILE_HOURLY_STATS => '{}'
+    FILE_HOURLY_STATS => '{}',
+    FILE_WAF_LEARNED => '[]'
 ];
 
 foreach ($newDefaultFiles as $file => $defaultContent) {
