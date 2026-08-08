@@ -940,9 +940,38 @@ function wafPrefixFromIP($ip) {
  * lista fixa do WAF antes de checar o IP do visitante.
  */
 function getWafLearnedPrefixes() {
-    $entries = readJsonFile(FILE_WAF_LEARNED, []);
-    if (!is_array($entries)) return [];
+    $entries = sanitizeWafLearned();
     return array_values(array_unique(array_filter(array_column($entries, 'prefix'))));
+}
+
+/**
+ * Revalida os prefixos ja aprendidos contra as regras ATUAIS de deteccao,
+ * usando o hostname que foi salvo junto. Entradas que nao batem mais
+ * (ex: ISP residencial aprendido por engano com a regra antiga de
+ * substring) sao removidas automaticamente e o arquivo e reescrito.
+ * Assim o sistema se auto-corrige sem precisar de acao manual.
+ */
+function sanitizeWafLearned() {
+    $entries = readJsonFile(FILE_WAF_LEARNED, []);
+    if (!is_array($entries) || empty($entries)) return is_array($entries) ? $entries : [];
+
+    $clean = [];
+    $removed = false;
+    foreach ($entries as $e) {
+        $host = $e['hostname'] ?? '';
+        // Mantem entradas sem hostname (nao da pra revalidar) e as que
+        // ainda batem na regra atual. Descarta as que viraram falso-positivo.
+        if ($host === '' || matchDatacenterHostname($host) !== null) {
+            $clean[] = $e;
+        } else {
+            $removed = true;
+        }
+    }
+
+    if ($removed) {
+        writeJsonFile(FILE_WAF_LEARNED, array_values($clean));
+    }
+    return $clean;
 }
 
 /**
@@ -1020,29 +1049,70 @@ function detectDatacenterByReverseDNS($ip) {
 
     if (!$hostname || $hostname === $ip) return null;
 
-    $hostname = strtolower($hostname);
+    return matchDatacenterHostname($hostname);
+}
 
-    // Palavras-chave de PTR conhecidas de ByteDance/TikTok e dos principais
-    // provedores de nuvem/datacenter usados por bots e scrapers.
-    $keywords = [
+/**
+ * Matcher PURO (sem DNS): recebe um hostname e diz se ele pertence a um
+ * datacenter/nuvem conhecido, casando por FRONTEIRA de dominio/label.
+ * Usado tanto pela deteccao ao vivo quanto pela auto-limpeza dos prefixos
+ * ja aprendidos (revalida entradas antigas contra as regras atuais).
+ */
+function matchDatacenterHostname($hostname) {
+    if (!$hostname) return null;
+    $hostname = strtolower(rtrim($hostname, '.'));
+
+    // Quebra o hostname em labels (ex: "ec2-1-2-3.compute-1.amazonaws.com"
+    // -> [ec2-1-2-3, compute-1, amazonaws, com]) para casar por FRONTEIRA
+    // de dominio, e NAO por substring solta. Isso evita falsos positivos
+    // como "sulonline.net" (ISP residencial brasileiro) ser confundido com
+    // o datacenter "online.net" (Scaleway) - bug que ja bloqueou visitante
+    // real do TikTok nos logs.
+    $labels = explode('.', $hostname);
+
+    // Grupo A: dominios completos (tem ponto). So casam se o hostname FOR
+    // exatamente esse dominio ou terminar em ".dominio" - respeitando a
+    // fronteira de label. "sulonline.net" NAO termina em ".online.net".
+    $domainKeywords = [
         // ByteDance / TikTok
-        'bytedance', 'byteoversea', 'ttgslb', 'tiktokv', 'tiktokcdn',
-        'isnssdk', 'musical.ly', 'toutiao', 'ibytedtos',
+        'musical.ly',
         // Big clouds
-        'amazonaws', 'awsglobalaccelerator', 'googleusercontent', '1e100.net',
-        'googlebot', '.google.', '.google', 'azure', 'microsoft', 'cloudapp.net',
-        'oraclecloud', 'oraclevcn',
-        // Provedores de VPS/datacenter comuns em trafego de bot
-        'ovh.net', 'ovh.ca', 'hetzner.com', 'hetzner.de', 'digitalocean',
-        'linode.com', 'akamai', 'vultr.com', 'choopa', 'colocrossing',
-        'racknerd', 'hostwinds', 'contabo.net', 'scaleway.com', 'online.net',
-        'leaseweb', 'psychz', 'quadranet',
+        'amazonaws.com', '1e100.net', 'cloudapp.net', 'cloudapp.azure.com',
+        // VPS / datacenter
+        'ovh.net', 'ovh.ca', 'hetzner.com', 'hetzner.de', 'linode.com',
+        'vultr.com', 'contabo.net', 'scaleway.com', 'online.net',
+        'leaseweb.com', 'quadranet.com',
         // China cloud
-        'alibaba', 'aliyuncs', 'aliyun', 'tencent', 'myqcloud',
+        'aliyuncs.com', 'myqcloud.com',
     ];
 
-    foreach ($keywords as $kw) {
-        if (strpos($hostname, $kw) !== false) {
+    // Grupo B: tokens distintivos que aparecem como UM label inteiro
+    // (ex: label "amazonaws", "bytedance", "digitalocean"). Casam so se
+    // forem igual a algum label - nunca como pedaco de outra palavra.
+    $labelKeywords = [
+        // ByteDance / TikTok
+        'bytedance', 'byteoversea', 'ttgslb', 'tiktokv', 'tiktokcdn',
+        'isnssdk', 'toutiao', 'ibytedtos',
+        // Big clouds
+        'amazonaws', 'awsglobalaccelerator', 'googleusercontent',
+        'googlebot', 'google', 'azure', 'oraclecloud', 'oraclevcn',
+        // VPS / datacenter
+        'digitalocean', 'akamai', 'choopa', 'colocrossing', 'racknerd',
+        'hostwinds', 'psychz', 'quadranet',
+        // China cloud
+        'alibaba', 'aliyun', 'tencent',
+    ];
+
+    // Casa por sufixo de dominio (fronteira de label)
+    foreach ($domainKeywords as $kw) {
+        if ($hostname === $kw || substr($hostname, -(strlen($kw) + 1)) === '.' . $kw) {
+            return ['hostname' => $hostname, 'keyword' => $kw];
+        }
+    }
+
+    // Casa por label exato
+    foreach ($labelKeywords as $kw) {
+        if (in_array($kw, $labels, true)) {
             return ['hostname' => $hostname, 'keyword' => $kw];
         }
     }
