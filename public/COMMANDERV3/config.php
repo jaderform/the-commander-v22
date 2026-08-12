@@ -270,13 +270,18 @@ define('FILE_HOURLY_STATS', DATA_DIR . 'hourly_stats.json');
 // (ByteDance/TikTok/datacenters detectados sozinhos, sem cadastro manual)
 define('FILE_WAF_LEARNED', DATA_DIR . 'waf_learned_prefixes.json');
 
+// IPs marcados como "scanner" (bateram sem UTM em varias campanhas em
+// poucos segundos) - uma vez marcados, nunca mais viram BLACK.
+define('FILE_WAF_SCANNERS', DATA_DIR . 'waf_scanners.json');
+
 // Criar arquivos padrao das melhorias
 $newDefaultFiles = [
     FILE_WEBHOOKS => '{"telegram":{"enabled":false,"bot_token":"","chat_id":""},"discord":{"enabled":false,"url":""}}',
     FILE_URL_ROTATION => '{}',
     FILE_ADVANCED_STATS => '{"by_hour":{},"js_challenges":{"passed":0,"failed":0},"fingerprints":{}}',
     FILE_HOURLY_STATS => '{}',
-    FILE_WAF_LEARNED => '[]'
+    FILE_WAF_LEARNED => '[]',
+    FILE_WAF_SCANNERS => '{}'
 ];
 
 foreach ($newDefaultFiles as $file => $defaultContent) {

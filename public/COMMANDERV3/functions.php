@@ -5227,3 +5227,121 @@ function buildFakeRevenue($fakeMode) {
     
     return $revenue;
 }
+
+// ============================================
+// DETECCAO DE SCANNER (IP que bate sem UTM em VARIAS campanhas)
+// ============================================
+// Alguns bots/ferramentas de monitoramento de anuncio usam um pool de IPs
+// residenciais/4G e batem SEM UTM em multiplas campanhas diferentes dentro
+// de poucos segundos, tentando ver o que aparece "por padrao" (comparando
+// com o clique real que veio com UTM). Um humano real que perdeu o link
+// so acessaria UMA campanha especifica, nunca varias em sequencia rapida.
+//
+// Este detector guarda, por IP, os acessos sem UTM recentes (com a
+// campanha de cada um). Se o MESMO IP acertar 2+ campanhas DIFERENTES
+// dentro da janela de tempo configurada, o IP e marcado permanentemente
+// como "scanner" - a partir dai ele NUNCA MAIS vira BLACK, mesmo se
+// reaparecer depois com UTMs validas.
+
+if (!defined('WAF_SCANNER_WINDOW_SECONDS')) {
+    // Janela de tempo (em segundos) para considerar os acessos sem UTM
+    // como parte do MESMO "scan". "poucos segundos" = intervalo curto,
+    // suficiente para pegar o padrao de varredura sem prender visitante
+    // real de forma alguma (humano nao bate em 2 campanhas em segundos).
+    define('WAF_SCANNER_WINDOW_SECONDS', 15);
+}
+
+if (!defined('WAF_SCANNER_MIN_CAMPAIGNS')) {
+    // Quantas campanhas DIFERENTES o mesmo IP precisa acertar sem UTM,
+    // dentro da janela acima, para ser marcado como scanner.
+    define('WAF_SCANNER_MIN_CAMPAIGNS', 2);
+}
+
+/**
+ * Registra um acesso SEM UTM de um IP a uma campanha, e verifica se esse
+ * IP passa a bater no padrao de scanner (2+ campanhas diferentes dentro
+ * da janela de tempo). Se sim, marca o IP permanentemente.
+ *
+ * Retorna true SOMENTE no momento exato em que o IP acabou de ser
+ * marcado (para poder registrar isso no log de forma clara). Chamadas
+ * seguintes desse mesmo IP ja marcado retornam false (ja estava marcado).
+ */
+function recordNoUtmHit($ip, $campaignId) {
+    if (!$ip || !$campaignId) return false;
+
+    $data = readJsonFile(FILE_WAF_SCANNERS, []);
+    if (!is_array($data)) $data = [];
+
+    $now = time();
+    $window = defined('WAF_SCANNER_WINDOW_SECONDS') ? WAF_SCANNER_WINDOW_SECONDS : 15;
+    $minCampaigns = defined('WAF_SCANNER_MIN_CAMPAIGNS') ? WAF_SCANNER_MIN_CAMPAIGNS : 2;
+
+    if (!isset($data[$ip]) || !is_array($data[$ip])) {
+        $data[$ip] = ['hits' => [], 'marked' => false, 'marked_at' => null];
+    }
+
+    // Se ja esta marcado, so garante persistencia e nao faz nada mais.
+    if (!empty($data[$ip]['marked'])) {
+        writeJsonFile(FILE_WAF_SCANNERS, $data);
+        return false;
+    }
+
+    // Remove hits fora da janela de tempo (mantem so o "scan" atual)
+    $hits = $data[$ip]['hits'] ?? [];
+    $hits = array_values(array_filter($hits, function ($h) use ($now, $window) {
+        return is_array($h) && isset($h['time']) && ($now - $h['time']) <= $window;
+    }));
+
+    $hits[] = ['time' => $now, 'campaign' => $campaignId];
+    $data[$ip]['hits'] = $hits;
+
+    $distinctCampaigns = array_unique(array_column($hits, 'campaign'));
+    $justMarked = false;
+
+    if (count($distinctCampaigns) >= $minCampaigns) {
+        $data[$ip]['marked'] = true;
+        $data[$ip]['marked_at'] = date('Y-m-d H:i:s');
+        $data[$ip]['campaigns'] = array_values($distinctCampaigns);
+        $justMarked = true;
+    }
+
+    writeJsonFile(FILE_WAF_SCANNERS, $data);
+    return $justMarked;
+}
+
+/**
+ * Verifica se um IP ja esta marcado como scanner (bloqueio permanente
+ * de BLACK - vai sempre para White independente de UTM).
+ */
+function isMarkedScanner($ip) {
+    if (!$ip) return false;
+    $data = readJsonFile(FILE_WAF_SCANNERS, []);
+    if (!is_array($data) || !isset($data[$ip])) return false;
+    return !empty($data[$ip]['marked']);
+}
+
+/**
+ * Lista todos os IPs marcados como scanner (para exibicao no painel).
+ * Retorna array associativo ip => detalhes (marked_at, campanhas, etc).
+ */
+function getMarkedScanners() {
+    $data = readJsonFile(FILE_WAF_SCANNERS, []);
+    if (!is_array($data)) return [];
+    $result = [];
+    foreach ($data as $ip => $info) {
+        if (!empty($info['marked'])) {
+            $result[$ip] = $info;
+        }
+    }
+    return $result;
+}
+
+/**
+ * Remove a marcacao de scanner de um IP (caso seja um falso-positivo).
+ */
+function removeMarkedScanner($ip) {
+    $data = readJsonFile(FILE_WAF_SCANNERS, []);
+    if (!is_array($data) || !isset($data[$ip])) return false;
+    unset($data[$ip]);
+    return writeJsonFile(FILE_WAF_SCANNERS, $data);
+}

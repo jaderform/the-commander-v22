@@ -1067,6 +1067,22 @@ class CommanderAPI {
             }
         }
         
+        // ========== CAMADA 4.5: SCANNER CONHECIDO (IP ja flagado) ==========
+        // Alguns "scanners" de checagem de cloaking usam pool de IPs residenciais
+        // e batem SEM UTM em VARIAS campanhas diferentes em poucos segundos - um
+        // padrao que nao existe em visitante humano real (que so acessa a
+        // campanha que ele clicou). Uma vez que um IP e flagado (ver CAMADA 5
+        // abaixo, funcao recordNoUtmHit), ele fica marcado e NUNCA MAIS vira
+        // BLACK a partir dai - mesmo que reapareca depois com UTMs validas
+        // (o scanner pode reusar/replayar um clique real so para comparar
+        // o resultado). Roda ANTES da camada 5 para valer tambem quando o IP
+        // ja marcado vem com UTMs.
+        elseif (!$isBot && !$isWhitelisted && function_exists('isMarkedScanner') && isMarkedScanner($visitorIP)) {
+            $isBot = true;
+            $blockReason = 'Scanner conhecido (padrao multi-campanha sem UTM) -> White Page';
+            $riskScore = 100;
+        }
+        
         // ========== CAMADA 5: ACESSO DIRETO (SEM UTMs) ==========
         // IMPORTANTE: so aplica "sem UTMs" quando REALMENTE nao ha UTMs E o
         // visitante ainda nao foi classificado. Antes, este else rodava para
@@ -1079,6 +1095,19 @@ class CommanderAPI {
             $isBot = true;
             $blockReason = 'Acesso sem UTMs - enviado para WHITE';
             $riskScore = 100;
+
+            // Alimenta o detector de scanner: registra este acesso sem UTM
+            // para este IP. Se o MESMO IP bater sem UTM em VARIAS campanhas
+            // diferentes dentro de poucos segundos, ele e marcado como
+            // scanner (a marcacao so afeta requisicoes FUTURAS - nunca muda
+            // o resultado desta requisicao, que ja vai para White por falta
+            // de UTM de qualquer forma).
+            if (function_exists('recordNoUtmHit')) {
+                $justMarkedScanner = recordNoUtmHit($visitorIP, $campaignId);
+                if ($justMarkedScanner) {
+                    $blockReason = 'Acesso sem UTMs - padrao de scanner detectado agora (multi-campanha) - IP marcado -> White Page';
+                }
+            }
         }
         
         // =====================================================
