@@ -727,6 +727,36 @@ class CommanderAPI {
             }
         }
 
+// --- INICIO DA TRAVA DE HARDWARE ANTI-BOT ---
+            $_secMobile = $_SERVER['HTTP_SEC_CH_UA_MOBILE'] ?? '';
+            $_secPlatform = $_SERVER['HTTP_SEC_CH_UA_PLATFORM'] ?? '';
+
+            if (!empty($_secMobile) && trim($_secMobile) === '?0') {
+                $this->logBotAccess($visitorIP, $visitorUA, "Hardware: Confessou ser Desktop (?0) -> White Page", $campaignId, $utmSource, $platform);
+                recordHourlyClick(true); recordClick($campaignId, true, $platform);
+                jsonResponse([
+                    'action'   => 'white',
+                    'url'      => $campaign['white_url'] ?? '',
+                    'method'   => $campaign['white_method'] ?? 'redirect',
+                    'reason'   => 'hardware_not_mobile'
+                ]);
+            }
+
+            if (!empty($_secPlatform)) {
+                $_plat = strtolower(trim($_secPlatform, '"\' '));
+                if (in_array($_plat, ['windows', 'linux', 'macos', 'chrome os'])) {
+                    $this->logBotAccess($visitorIP, $visitorUA, "Hardware: Confessou SO Desktop ({$_plat}) -> White Page", $campaignId, $utmSource, $platform);
+                    recordHourlyClick(true); recordClick($campaignId, true, $platform);
+                    jsonResponse([
+                        'action'   => 'white',
+                        'url'      => $campaign['white_url'] ?? '',
+                        'method'   => $campaign['white_method'] ?? 'redirect',
+                        'reason'   => 'hardware_desktop_os'
+                    ]);
+                }
+            }
+            // --- FIM DA TRAVA DE HARDWARE ---
+
         // =====================================================
         // HORARIO DE PAUSA (White Mode / Agendamento)
         // =====================================================
