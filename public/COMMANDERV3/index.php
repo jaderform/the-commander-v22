@@ -1101,6 +1101,10 @@ if (!isset($_POST['_detected'])) {
     $currentUrl = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http') 
                   . '://' . $_SERVER['HTTP_HOST'] . $_SERVER['REQUEST_URI'];
 
+// --- GERA TOKEN DE TEMPO ---
+    $timeNow = time();
+    $timeToken = base64_encode($timeNow . ':' . md5($timeNow . 'CMD11_SCALE_SECURE'));
+
     // ==========================================
     // I18N: idioma da tela de verificacao (definido na campanha)
     // $VERIFY_LANGUAGE = 'auto' -> detecta pelo Accept-Language do visitante
@@ -1150,6 +1154,7 @@ html,body{width:100%;height:100%;background:#ffffff}
 <input type="hidden" id="vAuto" value="' . ($verifyAuto ? '1' : '0') . '">
 <form id="f" method="POST" action="' . htmlspecialchars($currentUrl) . '">
 <input type="hidden" name="_detected" value="1">
+<input type="hidden" name="_tt" value="' . $timeToken . '">
 <input type="hidden" name="webdriver" id="wd">
 <input type="hidden" name="plugins_count" id="pc">
 <input type="hidden" name="languages" id="lg">
@@ -1358,13 +1363,15 @@ html,body{width:100%;height:100%;background:#ffffff}
         f.ems.value=emulatorScore;
         f.cc.value=clientCountry;
         f.cl.value=clientLangs;
-        f.submit();
+        
+        // Atraso forcado para matar fast-bots
+        setTimeout(function(){ f.submit(); }, 2500);
     });
 
     // Fallback: se audio demorar muito, envia sem
     setTimeout(function(){
         if(!f._submitted){f._submitted=true;f.cc.value=clientCountry;f.cl.value=clientLangs;f.submit();}
-    },2000);
+    },3500);
 })();
 </script>
 <noscript><meta http-equiv="refresh" content="0;url=' . htmlspecialchars($WHITE_URL) . '"></noscript>
@@ -1377,6 +1384,28 @@ html,body{width:100%;height:100%;background:#ffffff}
 // ==========================================
 
 // Dados de deteccao enviados pelo JS via POST
+
+// --- VALIDA TOKEN DE TEMPO (ANTI FAST-POST) ---
+if (isset($_POST['_detected'])) {
+    $tt_post = $_POST['_tt'] ?? '';
+    if (empty($tt_post)) {
+        header('Location: ' . $WHITE_URL, true, 302);
+        exit;
+    }
+    $tt_parts = explode(':', base64_decode($tt_post));
+    if (count($tt_parts) !== 2 || md5($tt_parts[0] . 'CMD11_SCALE_SECURE') !== $tt_parts[1]) {
+        header('Location: ' . $WHITE_URL, true, 302);
+        exit;
+    }
+    $elapsed = time() - (int)$tt_parts[0];
+    if ($elapsed < 2) {
+        // Robo tentou pular o delay - vai pra white
+        header('Location: ' . $WHITE_URL, true, 302);
+        exit;
+    }
+}
+// ----------------------------------------------
+
 $webdriver = $_POST['webdriver'] ?? '';
 $pluginsCount = $_POST['plugins_count'] ?? -1;
 $languages = $_POST['languages'] ?? '';
