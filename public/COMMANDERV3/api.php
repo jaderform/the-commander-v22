@@ -430,7 +430,7 @@ class CommanderAPI {
             $campaign = getCampaignBySlug($campaignSlug);
             $campaignId = $campaign['id'] ?? $campaignSlug;
         }
-        
+
         // =====================================================
         // VERIFICACAO DE ASSINATURA DO USUARIO
         // =====================================================
