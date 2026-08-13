@@ -5320,7 +5320,8 @@ HTACCESS;
                 </div>
             </div>
 
-            <div style="display:flex;gap:12px;margin-bottom:18px;">
+            <div style="display:flex;gap:12px;marg
+in-bottom:18px;">
                 <div style="width:26px;height:26px;border-radius:50%;background:var(--success);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;flex-shrink:0;">3</div>
                 <div>
                     <strong style="color:var(--light);">Selecione o domínio na campanha.</strong>
