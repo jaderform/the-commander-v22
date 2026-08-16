@@ -5549,3 +5549,85 @@ function removeForceWhite($ip) {
     unset($data[$key]);
     return writeJsonFile(FILE_FREQ_CAP, $data);
 }
+
+// ============================================
+// FINGERPRINT VELOCITY - deteccao de farm / bots "humanos"
+// ============================================
+// Ideia: um mesmo fingerprint de device visto em MUITAS redes diferentes em
+// pouco tempo e farm (mesma imagem de emulador reusada). Humano real tem
+// fingerprint diverso e fica em 1 rede. As redes sao contadas por prefixo
+// /64 (IPv6) ou IP cheio (IPv4), o mesmo criterio do frequency cap, para nao
+// punir a rotacao natural de IPv6 de um mesmo aparelho.
+
+/**
+ * Monta um hash de fingerprint de device a partir dos sinais coletados.
+ * Retorna '' quando os sinais sao fracos demais para identificar um device
+ * (evita agrupar todos os "vazios" num falso farm).
+ */
+function buildDeviceFingerprint($data) {
+    $canvas = trim((string)($data['canvas_fp'] ?? ''));
+    $webgl  = trim((string)($data['webgl_fp'] ?? ''));
+    $audio  = trim((string)($data['audio_fp'] ?? ''));
+    $screen = trim((string)($data['screen_width'] ?? '')) . 'x' . trim((string)($data['screen_height'] ?? ''));
+    $tz     = trim((string)($data['timezone'] ?? ''));
+    $plat   = trim((string)($data['platform'] ?? ''));
+
+    // Considera "forte" apenas se houver pelo menos um sinal de hardware real
+    // (canvas/webgl/audio) valido - descarta erros e vazios.
+    $strong = 0;
+    foreach ([$canvas, $webgl, $audio] as $sig) {
+        if ($sig !== '' && stripos($sig, 'err') === false
+            && stripos($sig, 'unsupported') === false && $sig !== '0') {
+            $strong++;
+        }
+    }
+    if ($strong === 0) {
+        return '';
+    }
+
+    return md5(implode('|', [$canvas, $webgl, $audio, $screen, $tz, $plat]));
+}
+
+/**
+ * Registra que este fingerprint foi visto vindo da rede do IP dado, dentro
+ * da janela, e retorna quantas REDES distintas ja usaram esse fingerprint.
+ * Higieniza redes vencidas para manter o arquivo enxuto.
+ */
+function fpTrackAndCountNetworks($fpHash, $ip, $window = null) {
+    if ($fpHash === '') {
+        return 0;
+    }
+    if ($window === null) {
+        $window = defined('FP_VELOCITY_WINDOW') ? FP_VELOCITY_WINDOW : 3600;
+    }
+    $net = freqVisitorKey($ip); // /64 no IPv6, IP cheio no IPv4
+    $now = time();
+
+    $data = readJsonFile(FILE_FP_VELOCITY, []);
+    if (!is_array($data)) {
+        $data = [];
+    }
+
+    $entry = (isset($data[$fpHash]) && is_array($data[$fpHash])) ? $data[$fpHash] : [];
+    // entry: [ netKey => lastSeenTimestamp ]
+    $entry[$net] = $now;
+
+    // Remove redes fora da janela
+    foreach ($entry as $k => $ts) {
+        if (($now - (int)$ts) > $window) {
+            unset($entry[$k]);
+        }
+    }
+    $data[$fpHash] = $entry;
+
+    // Higieniza fingerprints que ficaram sem nenhuma rede na janela
+    foreach ($data as $fp => $nets) {
+        if (!is_array($nets) || empty($nets)) {
+            unset($data[$fp]);
+        }
+    }
+
+    writeJsonFile(FILE_FP_VELOCITY, $data);
+
+    return count($entry);
+}

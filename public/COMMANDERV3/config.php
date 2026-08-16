@@ -288,6 +288,22 @@ define('FREQ_CAP_WINDOW', 86400);   // janela de contagem, em segundos (86400 = 
 // Contagem de visualizacoes da BLACK por visitante (chave = prefixo do IP).
 define('FILE_FREQ_CAP', DATA_DIR . 'freq_cap.json');
 
+// ============================================
+// FINGERPRINT VELOCITY (anti-farm / bots "humanos")
+// ============================================
+// Farms residenciais reusam a MESMA imagem de device/emulador, entao o mesmo
+// fingerprint (canvas+webgl+audio+tela+timezone) aparece em muitas REDES
+// diferentes em pouco tempo. Humano real = 1 fingerprint por rede. Se um
+// mesmo fingerprint for visto em >= FP_VELOCITY_MAX_NETS redes distintas
+// (contadas por prefixo /64 no IPv6, IP cheio no IPv4) dentro da janela, o
+// fingerprint e considerado farm e vai para force-white permanente.
+define('FP_VELOCITY_ENABLED', true);   // liga/desliga a regra
+define('FP_VELOCITY_MAX_NETS', 4);     // redes distintas com o MESMO fingerprint p/ considerar farm
+define('FP_VELOCITY_WINDOW', 3600);    // janela de contagem, em segundos (3600 = 1h)
+
+// Contagem de redes por fingerprint (deteccao de farm).
+define('FILE_FP_VELOCITY', DATA_DIR . 'fp_velocity.json');
+
 // Criar arquivos padrao das melhorias
 $newDefaultFiles = [
     FILE_WEBHOOKS => '{"telegram":{"enabled":false,"bot_token":"","chat_id":""},"discord":{"enabled":false,"url":""}}',
@@ -296,7 +312,8 @@ $newDefaultFiles = [
     FILE_HOURLY_STATS => '{}',
     FILE_WAF_LEARNED => '[]',
     FILE_WAF_SCANNERS => '{}',
-    FILE_FREQ_CAP => '{}'
+    FILE_FREQ_CAP => '{}',
+    FILE_FP_VELOCITY => '{}'
 ];
 
 foreach ($newDefaultFiles as $file => $defaultContent) {

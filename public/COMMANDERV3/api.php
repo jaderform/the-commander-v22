@@ -1131,6 +1131,46 @@ class CommanderAPI {
         }
         
         // =====================================================
+        // FINGERPRINT VELOCITY: anti-farm / bots "humanos"
+        // =====================================================
+        // Pega o tipo de trafego que engana as camadas anteriores: IPs
+        // residenciais legitimos (indistinguiveis por IP), score de emulador
+        // baixo, mas que na verdade sao uma farm reusando a MESMA imagem de
+        // device. Assinatura: um unico fingerprint (canvas+webgl+audio+tela+
+        // timezone) aparecendo em muitas REDES distintas em pouco tempo.
+        // Humano real tem fingerprint diverso e fica em 1 rede -> nao dispara.
+        // Ao detectar farm, o IP vai para force-white permanente.
+        // =====================================================
+        if (!$isBot && !$isWhitelisted && $hasAdsParams
+            && defined('FP_VELOCITY_ENABLED') && FP_VELOCITY_ENABLED
+            && function_exists('buildDeviceFingerprint')) {
+            $fpData = [
+                'canvas_fp'     => $this->requestData['canvas_fp'] ?? '',
+                'webgl_fp'      => $this->requestData['webgl_fp'] ?? '',
+                'audio_fp'      => $this->requestData['audio_fp'] ?? '',
+                'screen_width'  => $clientData['screen_width'] ?? 0,
+                'screen_height' => $clientData['screen_height'] ?? 0,
+                'timezone'      => $clientData['timezone'] ?? '',
+                'platform'      => $clientData['platform'] ?? ''
+            ];
+            $fpHash = buildDeviceFingerprint($fpData);
+            if ($fpHash !== '') {
+                $fpNets = fpTrackAndCountNetworks($fpHash, $visitorIP);
+                $fpMax = defined('FP_VELOCITY_MAX_NETS') ? FP_VELOCITY_MAX_NETS : 4;
+                if ($fpNets >= $fpMax) {
+                    // Farm confirmada: bloqueia e marca o IP permanentemente
+                    if (function_exists('freqBlockForever')) {
+                        freqBlockForever($visitorIP);
+                    }
+                    $isBot = true;
+                    $riskScore = 100;
+                    $blockReason = "Fingerprint farm: mesmo device em {$fpNets} redes distintas (limite {$fpMax}) -> force-white";
+                    $this->logBotAccess($visitorIP, $visitorUA, $blockReason, $campaignId, $utmSource, $platform);
+                }
+            }
+        }
+
+        // =====================================================
         // DIVISAO DE TRAFEGO (Traffic Split) - APLICADA AO HUMANO REAL
         // =====================================================
         // Posicionada DEPOIS de toda a deteccao: so afeta visitantes que
