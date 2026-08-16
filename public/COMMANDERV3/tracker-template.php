@@ -30,6 +30,17 @@ $DEBUG_MODE = isset($_GET['debug']) && $_GET['debug'] === '1';
 $CAMPAIGN_PLATFORM = 'tiktok';
 
 // ==========================================
+// FREQUENCY CAP: limite de visualizacoes da oferta (BLACK) por visitante
+// ==========================================
+// Observacao de trafego: acessos reais saturam em ate 2 visualizacoes do
+// BLACK; bots insistem e tentam passar mais vezes. Por isso, a partir da
+// 3a tentativa (acima de $FREQ_CAP_MAX) dentro da janela, o visitante e
+// enviado para a White Page, sem nem consultar a API.
+$FREQ_CAP_ENABLED = true;   // liga/desliga a regra
+$FREQ_CAP_MAX     = 2;      // quantas vezes o mesmo visitante pode ver o BLACK
+$FREQ_CAP_WINDOW  = 86400;  // janela de contagem, em segundos (86400 = 24h)
+
+// ==========================================
 // TRAVA ESTRITA POR PLATAFORMA (PRE-CHECK)
 // ==========================================
 // Campanhas de TikTok Ads so aceitam visitantes acessando de CELULAR
@@ -285,6 +296,20 @@ $platform = $_POST['platform'] ?? '';
 $advancedBotScore = $_POST['advanced_bot_score'] ?? '';
 $advancedBotFlags = $_POST['advanced_bot_flags'] ?? '';
 
+// ==========================================
+// FREQUENCY CAP (PRE-API): se o visitante ja atingiu o limite de
+// visualizacoes do BLACK dentro da janela, forca a White Page AGORA,
+// antes de gastar uma consulta a API. Acessos reais nunca chegam aqui
+// (saturam em $FREQ_CAP_MAX); quem insiste alem disso e tratado como bot.
+// ==========================================
+if ($FREQ_CAP_ENABLED) {
+    $__freqKey = freqVisitorKey($visitorIP);
+    if (freqCountViews($__freqKey, $FREQ_CAP_WINDOW) >= $FREQ_CAP_MAX) {
+        header('Location: ' . $WHITE_URL, true, 302);
+        exit;
+    }
+}
+
 // Envia para API com todos os dados de deteccao
 $response = checkWithAPI($API_URL, [
     'action' => 'check',
@@ -327,6 +352,12 @@ if ($response && isset($response['action'])) {
     // Define URL e método de redirecionamento
     // CORRECAO V11.1: Garante que a URL correta seja usada para cada action
     if ($response['action'] === 'black') {
+        // FREQUENCY CAP: contabiliza esta visualizacao do BLACK para o
+        // visitante. Na proxima vez que ele estourar $FREQ_CAP_MAX, a
+        // checagem PRE-API acima ja o desviara para a White Page.
+        if ($FREQ_CAP_ENABLED) {
+            freqRecordView(freqVisitorKey($visitorIP), $FREQ_CAP_WINDOW);
+        }
         // Para BLACK: pega a URL da black page da resposta da API
         // Prioridade: url > redirect > fallback para BLACK_URL local
         $targetUrl = $response['url'] ?? $response['redirect'] ?? $BLACK_URL;
@@ -390,6 +421,134 @@ function getVisitorIP() {
         }
     }
     return $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0';
+}
+
+// ============================================
+// FREQUENCY CAP - FUNCOES AUXILIARES
+// ============================================
+
+/**
+ * Gera a chave de contagem do visitante.
+ * IPv6 troca o sufixo do endereco a cada conexao (privacy extensions),
+ * entao contar pelo IP inteiro nao segura o mesmo aparelho. Por isso
+ * usamos apenas o prefixo /64 (primeiros 64 bits) no IPv6. IPv4 usa o
+ * endereco completo.
+ */
+function freqVisitorKey($ip) {
+    $ip = trim((string)$ip);
+    if ($ip === '') {
+        return 'v0:unknown';
+    }
+    // IPv6
+    if (strpos($ip, ':') !== false) {
+        $packed = @inet_pton($ip);
+        if ($packed !== false && strlen($packed) === 16) {
+            // Mantem apenas os primeiros 64 bits (8 bytes) = prefixo /64
+            return 'v6:' . bin2hex(substr($packed, 0, 8));
+        }
+        // Fallback textual: primeiros 4 grupos
+        $parts = explode(':', $ip);
+        return 'v6:' . strtolower(implode(':', array_slice($parts, 0, 4)));
+    }
+    // IPv4
+    return 'v4:' . $ip;
+}
+
+/**
+ * Caminho do arquivo local que armazena as contagens.
+ * Usa o diretorio temporario do sistema para maxima portabilidade
+ * (nao depende de permissao de escrita na pasta do site).
+ */
+function freqStorePath() {
+    return rtrim(sys_get_temp_dir(), '/\\') . DIRECTORY_SEPARATOR . 'cmd_freq_cap.json';
+}
+
+/**
+ * Conta quantas visualizacoes do BLACK o visitante teve dentro da janela.
+ * Leitura com lock compartilhado (LOCK_SH).
+ */
+function freqCountViews($key, $window) {
+    $path = freqStorePath();
+    if (!is_file($path)) {
+        return 0;
+    }
+    $fp = @fopen($path, 'r');
+    if (!$fp) {
+        return 0;
+    }
+    @flock($fp, LOCK_SH);
+    $raw = stream_get_contents($fp);
+    @flock($fp, LOCK_UN);
+    fclose($fp);
+
+    $data = json_decode((string)$raw, true);
+    if (!is_array($data) || empty($data[$key]) || !is_array($data[$key])) {
+        return 0;
+    }
+    $now = time();
+    $count = 0;
+    foreach ($data[$key] as $ts) {
+        if (($now - (int)$ts) <= $window) {
+            $count++;
+        }
+    }
+    return $count;
+}
+
+/**
+ * Registra uma visualizacao do BLACK para o visitante.
+ * Escrita com lock exclusivo (LOCK_EX) e higienizacao dos timestamps
+ * vencidos de todas as chaves (mantem o arquivo pequeno).
+ */
+function freqRecordView($key, $window) {
+    $path = freqStorePath();
+    $fp = @fopen($path, 'c+');
+    if (!$fp) {
+        return;
+    }
+    if (!@flock($fp, LOCK_EX)) {
+        fclose($fp);
+        return;
+    }
+    $raw = stream_get_contents($fp);
+    $data = json_decode((string)$raw, true);
+    if (!is_array($data)) {
+        $data = [];
+    }
+    $now = time();
+
+    // Adiciona a visualizacao atual
+    if (empty($data[$key]) || !is_array($data[$key])) {
+        $data[$key] = [];
+    }
+    $data[$key][] = $now;
+
+    // Higieniza: remove timestamps fora da janela em todas as chaves
+    foreach ($data as $k => $arr) {
+        if (!is_array($arr)) {
+            unset($data[$k]);
+            continue;
+        }
+        $kept = [];
+        foreach ($arr as $ts) {
+            if (($now - (int)$ts) <= $window) {
+                $kept[] = (int)$ts;
+            }
+        }
+        if ($kept) {
+            $data[$k] = array_values($kept);
+        } else {
+            unset($data[$k]);
+        }
+    }
+
+    // Reescreve o arquivo de forma atomica dentro do lock
+    ftruncate($fp, 0);
+    rewind($fp);
+    fwrite($fp, json_encode($data));
+    fflush($fp);
+    @flock($fp, LOCK_UN);
+    fclose($fp);
 }
 
 /**
