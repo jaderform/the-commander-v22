@@ -1135,6 +1135,24 @@ class CommanderAPI {
             }
         }
 
+        // =====================================================
+        // FREQUENCY CAP: limite de visualizacoes da BLACK por visitante
+        // =====================================================
+        // So chega aqui quem passaria para a BLACK (isBot=false). Acessos
+        // reais saturam em FREQ_CAP_MAX visualizacoes; bots insistem alem
+        // disso. Ao estourar o limite dentro da janela, o visitante e
+        // desviado para a White Page. Whitelist (Admin/Teste) e ignorada.
+        // =====================================================
+        if (!$isBot && !$isWhitelisted && defined('FREQ_CAP_ENABLED') && FREQ_CAP_ENABLED
+            && function_exists('freqCountBlackViews')) {
+            $freqViews = freqCountBlackViews($visitorIP);
+            if ($freqViews >= FREQ_CAP_MAX) {
+                $isBot = true;
+                $riskScore = 100;
+                $blockReason = "Frequency cap: {$freqViews} acessos a BLACK (limite " . FREQ_CAP_MAX . ") -> White Page";
+            }
+        }
+
         // ========== REGISTRO E METRICAS ==========
         $advancedData = [
             'risk_score' => $riskScore,
@@ -1346,6 +1364,12 @@ class CommanderAPI {
             // SEMPRE loga quando vai para white (para debug)
             $this->logBotAccess($visitorIP, $visitorUA, $blockReason, $campaignId, $utmSource, $platform);
         } else {
+            // FREQUENCY CAP: contabiliza esta visualizacao da BLACK. Quando o
+            // visitante estourar FREQ_CAP_MAX, a camada de checagem acima
+            // passara a desvia-lo para a White Page nos proximos acessos.
+            if (defined('FREQ_CAP_ENABLED') && FREQ_CAP_ENABLED && function_exists('freqRecordBlackView')) {
+                freqRecordBlackView($visitorIP);
+            }
             // Humano → black page (oferta real) com UTMs preservados
             $finalBlackUrl = $blackUrl ?? '';
             if (!empty($finalBlackUrl) && !empty($utmSource)) {

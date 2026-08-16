@@ -5345,3 +5345,95 @@ function removeMarkedScanner($ip) {
     unset($data[$ip]);
     return writeJsonFile(FILE_WAF_SCANNERS, $data);
 }
+
+// ============================================
+// FREQUENCY CAP - limite de visualizacoes da BLACK por visitante
+// ============================================
+// Regra: acessos reais saturam em ate FREQ_CAP_MAX visualizacoes da oferta;
+// bots insistem alem disso. A partir da (FREQ_CAP_MAX + 1)a visualizacao,
+// dentro de FREQ_CAP_WINDOW, o visitante e desviado para a White Page.
+
+/**
+ * Gera a chave de contagem do visitante.
+ * No IPv6 o sufixo do endereco muda a cada conexao (privacy extensions),
+ * entao contar pelo IP inteiro nao segura o mesmo aparelho. Por isso
+ * usamos apenas o prefixo de rede /64 (primeiros 4 grupos) no IPv6 -
+ * mesmo criterio ja usado na whitelist. IPv4 usa o endereco completo.
+ */
+function freqVisitorKey($ip) {
+    $ip = trim((string)$ip);
+    if ($ip === '') {
+        return 'unknown';
+    }
+    // IPv6: usa o prefixo /64 (primeiros 4 grupos)
+    if (strpos($ip, ':') !== false) {
+        $parts = explode(':', $ip);
+        return 'v6:' . strtolower(implode(':', array_slice($parts, 0, 4)));
+    }
+    // IPv4: endereco completo
+    return 'v4:' . $ip;
+}
+
+/**
+ * Conta quantas visualizacoes da BLACK o visitante teve dentro da janela.
+ */
+function freqCountBlackViews($ip, $window = null) {
+    if ($window === null) {
+        $window = defined('FREQ_CAP_WINDOW') ? FREQ_CAP_WINDOW : 86400;
+    }
+    $key = freqVisitorKey($ip);
+    $data = readJsonFile(FILE_FREQ_CAP, []);
+    if (!is_array($data) || empty($data[$key]) || !is_array($data[$key])) {
+        return 0;
+    }
+    $now = time();
+    $count = 0;
+    foreach ($data[$key] as $ts) {
+        if (($now - (int)$ts) <= $window) {
+            $count++;
+        }
+    }
+    return $count;
+}
+
+/**
+ * Registra uma visualizacao da BLACK para o visitante e, de quebra,
+ * higieniza timestamps vencidos de todas as chaves (mantem o arquivo enxuto).
+ */
+function freqRecordBlackView($ip, $window = null) {
+    if ($window === null) {
+        $window = defined('FREQ_CAP_WINDOW') ? FREQ_CAP_WINDOW : 86400;
+    }
+    $key = freqVisitorKey($ip);
+    $data = readJsonFile(FILE_FREQ_CAP, []);
+    if (!is_array($data)) {
+        $data = [];
+    }
+    $now = time();
+
+    if (empty($data[$key]) || !is_array($data[$key])) {
+        $data[$key] = [];
+    }
+    $data[$key][] = $now;
+
+    // Higieniza: remove timestamps fora da janela de todas as chaves
+    foreach ($data as $k => $arr) {
+        if (!is_array($arr)) {
+            unset($data[$k]);
+            continue;
+        }
+        $kept = [];
+        foreach ($arr as $ts) {
+            if (($now - (int)$ts) <= $window) {
+                $kept[] = (int)$ts;
+            }
+        }
+        if ($kept) {
+            $data[$k] = array_values($kept);
+        } else {
+            unset($data[$k]);
+        }
+    }
+
+    return writeJsonFile(FILE_FREQ_CAP, $data);
+}

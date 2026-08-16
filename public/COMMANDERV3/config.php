@@ -274,6 +274,20 @@ define('FILE_WAF_LEARNED', DATA_DIR . 'waf_learned_prefixes.json');
 // poucos segundos) - uma vez marcados, nunca mais viram BLACK.
 define('FILE_WAF_SCANNERS', DATA_DIR . 'waf_scanners.json');
 
+// ============================================
+// FREQUENCY CAP (limite de visualizacoes da BLACK por visitante)
+// ============================================
+// Observacao de trafego: acessos reais saturam em ate 2 visualizacoes da
+// oferta (BLACK); bots insistem e tentam passar mais vezes. A partir da
+// 3a tentativa (acima de FREQ_CAP_MAX) dentro da janela, o visitante e
+// desviado para a White Page automaticamente.
+define('FREQ_CAP_ENABLED', true);   // liga/desliga a regra
+define('FREQ_CAP_MAX', 2);          // quantas vezes o mesmo visitante pode ver a BLACK
+define('FREQ_CAP_WINDOW', 86400);   // janela de contagem, em segundos (86400 = 24h)
+
+// Contagem de visualizacoes da BLACK por visitante (chave = prefixo do IP).
+define('FILE_FREQ_CAP', DATA_DIR . 'freq_cap.json');
+
 // Criar arquivos padrao das melhorias
 $newDefaultFiles = [
     FILE_WEBHOOKS => '{"telegram":{"enabled":false,"bot_token":"","chat_id":""},"discord":{"enabled":false,"url":""}}',
@@ -281,7 +295,8 @@ $newDefaultFiles = [
     FILE_ADVANCED_STATS => '{"by_hour":{},"js_challenges":{"passed":0,"failed":0},"fingerprints":{}}',
     FILE_HOURLY_STATS => '{}',
     FILE_WAF_LEARNED => '[]',
-    FILE_WAF_SCANNERS => '{}'
+    FILE_WAF_SCANNERS => '{}',
+    FILE_FREQ_CAP => '{}'
 ];
 
 foreach ($newDefaultFiles as $file => $defaultContent) {
