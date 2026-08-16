@@ -790,7 +790,16 @@ class CommanderAPI {
                 : ($nowMinutes >= $startMin || $nowMinutes < $endMin);
 
             if ($inPauseWindow) {
-                $this->logBotAccess($visitorIP, $visitorUA, "Horario de pausa ativo ({$schedStart}-{$schedEnd}) -> White Page", $campaignId, $utmSource, $platform);
+                // FORCE-WHITE: quem acessa durante a pausa e desviado para a
+                // White. Como a campanha esta "fechada", esse trafego e
+                // considerado suspeito -> marca o IP permanentemente para que,
+                // quando a campanha voltar a ativa, ele ja va direto para White.
+                // Whitelist (Admin/Teste) nunca e bloqueada.
+                if (!$isWhitelisted && defined('FREQ_CAP_ENABLED') && FREQ_CAP_ENABLED
+                    && function_exists('freqBlockForever')) {
+                    freqBlockForever($visitorIP);
+                }
+                $this->logBotAccess($visitorIP, $visitorUA, "Horario de pausa ativo ({$schedStart}-{$schedEnd}) -> White Page (force-white)", $campaignId, $utmSource, $platform);
                 recordHourlyClick(true);
                 recordClick($campaignId, true, $platform);
                 logBot([
@@ -826,7 +835,17 @@ class CommanderAPI {
             if ($totalClicks < $warmupClicks) {
                 // Ainda em aquecimento - manda todos para WHITE
                 $remaining = $warmupClicks - $totalClicks;
-                $this->logBotAccess($visitorIP, $visitorUA, "Aquecimento: {$totalClicks}/{$warmupClicks} cliques (faltam {$remaining})", $campaignId, $utmSource, $platform);
+
+                // FORCE-WHITE: quem acessa durante o aquecimento e desviado para
+                // a White. Esse trafego chega antes da campanha "abrir" de fato,
+                // entao e considerado suspeito -> marca o IP permanentemente para
+                // que, quando o aquecimento terminar, ele ja va direto para White.
+                // Whitelist ja foi descartada na condicao do bloco ($isWhitelisted).
+                if (defined('FREQ_CAP_ENABLED') && FREQ_CAP_ENABLED
+                    && function_exists('freqBlockForever')) {
+                    freqBlockForever($visitorIP);
+                }
+                $this->logBotAccess($visitorIP, $visitorUA, "Aquecimento: {$totalClicks}/{$warmupClicks} cliques (faltam {$remaining}) -> force-white", $campaignId, $utmSource, $platform);
                 
                 // IMPORTANTE: Registra o clique para o contador de aquecimento funcionar!
                 recordHourlyClick(false);
