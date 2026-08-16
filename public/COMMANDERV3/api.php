@@ -1138,18 +1138,30 @@ class CommanderAPI {
         // =====================================================
         // FREQUENCY CAP: limite de visualizacoes da BLACK por visitante
         // =====================================================
-        // So chega aqui quem passaria para a BLACK (isBot=false). Acessos
-        // reais saturam em FREQ_CAP_MAX visualizacoes; bots insistem alem
-        // disso. Ao estourar o limite dentro da janela, o visitante e
-        // desviado para a White Page. Whitelist (Admin/Teste) e ignorada.
+        // So chega aqui quem passaria para a BLACK (isBot=false). Whitelist
+        // (Admin/Teste) e sempre ignorada. Duas verificacoes:
+        //   1) Se o IP ja esta bloqueado PERMANENTEMENTE (passou do limite
+        //      em algum momento), vai direto para a White Page.
+        //   2) Se acabou de estourar FREQ_CAP_MAX visualizacoes na janela,
+        //      e bloqueado para sempre AGORA e desviado para a White.
+        // Acessos reais saturam em FREQ_CAP_MAX; bots insistem alem disso.
         // =====================================================
         if (!$isBot && !$isWhitelisted && defined('FREQ_CAP_ENABLED') && FREQ_CAP_ENABLED
-            && function_exists('freqCountBlackViews')) {
-            $freqViews = freqCountBlackViews($visitorIP);
-            if ($freqViews >= FREQ_CAP_MAX) {
+            && function_exists('freqIsBlocked')) {
+            if (freqIsBlocked($visitorIP)) {
+                // Bloqueio permanente ja existente -> force white
                 $isBot = true;
                 $riskScore = 100;
-                $blockReason = "Frequency cap: {$freqViews} acessos a BLACK (limite " . FREQ_CAP_MAX . ") -> White Page";
+                $blockReason = "Frequency cap: IP bloqueado permanentemente (force white) -> White Page";
+            } else {
+                $freqViews = freqCountBlackViews($visitorIP);
+                if ($freqViews >= FREQ_CAP_MAX) {
+                    // Passou do limite: marca como force-white PARA SEMPRE
+                    freqBlockForever($visitorIP);
+                    $isBot = true;
+                    $riskScore = 100;
+                    $blockReason = "Frequency cap: {$freqViews} acessos a BLACK (limite " . FREQ_CAP_MAX . ") -> bloqueado permanentemente";
+                }
             }
         }
 

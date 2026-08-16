@@ -5349,9 +5349,24 @@ function removeMarkedScanner($ip) {
 // ============================================
 // FREQUENCY CAP - limite de visualizacoes da BLACK por visitante
 // ============================================
-// Regra: acessos reais saturam em ate FREQ_CAP_MAX visualizacoes da oferta;
-// bots insistem alem disso. A partir da (FREQ_CAP_MAX + 1)a visualizacao,
-// dentro de FREQ_CAP_WINDOW, o visitante e desviado para a White Page.
+// Regra: acessos reais saturam em ate FREQ_CAP_MAX visualizacoes da oferta
+// (cada acesso real = 1 view, mesmo que gere 2 linhas de log). Bots insistem
+// alem disso. Ao passar de FREQ_CAP_MAX, o IP e marcado como "blocked" de
+// forma PERMANENTE e, em toda visita futura, vai direto para a White Page.
+//
+// Estrutura de cada entrada em FILE_FREQ_CAP:
+//   $data[$key] = [
+//     'views'      => [timestamp, timestamp, ...], // visualizacoes na janela
+//     'blocked'    => true|false,                  // bloqueio permanente
+//     'blocked_at' => 'Y-m-d H:i:s' | null,
+//   ]
+
+// Intervalo (segundos) para tratar acessos coladinhos como o MESMO acesso
+// real. Protege a contagem caso o tracker chame a API mais de uma vez por
+// visita (o que aparece como 2 linhas de log para 1 acesso).
+if (!defined('FREQ_CAP_DEDUP_SECONDS')) {
+    define('FREQ_CAP_DEDUP_SECONDS', 5);
+}
 
 /**
  * Gera a chave de contagem do visitante.
@@ -5375,6 +5390,46 @@ function freqVisitorKey($ip) {
 }
 
 /**
+ * Normaliza uma entrada do arquivo para a estrutura atual (views/blocked),
+ * aceitando tambem o formato antigo (lista simples de timestamps).
+ */
+function freqNormalizeEntry($entry) {
+    if (!is_array($entry)) {
+        return ['views' => [], 'blocked' => false, 'blocked_at' => null];
+    }
+    // Formato atual
+    if (array_key_exists('views', $entry) || array_key_exists('blocked', $entry)) {
+        $views = (isset($entry['views']) && is_array($entry['views']))
+            ? array_map('intval', array_values($entry['views'])) : [];
+        return [
+            'views'      => $views,
+            'blocked'    => !empty($entry['blocked']),
+            'blocked_at' => $entry['blocked_at'] ?? null,
+        ];
+    }
+    // Formato antigo: lista simples de timestamps
+    return [
+        'views'      => array_map('intval', array_values($entry)),
+        'blocked'    => false,
+        'blocked_at' => null,
+    ];
+}
+
+/**
+ * Verifica se o visitante ja esta bloqueado PERMANENTEMENTE (force white).
+ * Nao depende de janela de tempo - uma vez bloqueado, sempre bloqueado.
+ */
+function freqIsBlocked($ip) {
+    $key = freqVisitorKey($ip);
+    $data = readJsonFile(FILE_FREQ_CAP, []);
+    if (!is_array($data) || !isset($data[$key])) {
+        return false;
+    }
+    $entry = freqNormalizeEntry($data[$key]);
+    return $entry['blocked'];
+}
+
+/**
  * Conta quantas visualizacoes da BLACK o visitante teve dentro da janela.
  */
 function freqCountBlackViews($ip, $window = null) {
@@ -5383,12 +5438,13 @@ function freqCountBlackViews($ip, $window = null) {
     }
     $key = freqVisitorKey($ip);
     $data = readJsonFile(FILE_FREQ_CAP, []);
-    if (!is_array($data) || empty($data[$key]) || !is_array($data[$key])) {
+    if (!is_array($data) || !isset($data[$key])) {
         return 0;
     }
+    $entry = freqNormalizeEntry($data[$key]);
     $now = time();
     $count = 0;
-    foreach ($data[$key] as $ts) {
+    foreach ($entry['views'] as $ts) {
         if (($now - (int)$ts) <= $window) {
             $count++;
         }
@@ -5397,13 +5453,35 @@ function freqCountBlackViews($ip, $window = null) {
 }
 
 /**
- * Registra uma visualizacao da BLACK para o visitante e, de quebra,
- * higieniza timestamps vencidos de todas as chaves (mantem o arquivo enxuto).
+ * Marca o visitante como bloqueado PERMANENTEMENTE (force white para sempre).
+ */
+function freqBlockForever($ip) {
+    $key = freqVisitorKey($ip);
+    $data = readJsonFile(FILE_FREQ_CAP, []);
+    if (!is_array($data)) {
+        $data = [];
+    }
+    $entry = isset($data[$key]) ? freqNormalizeEntry($data[$key])
+                                : ['views' => [], 'blocked' => false, 'blocked_at' => null];
+    $entry['blocked'] = true;
+    if (empty($entry['blocked_at'])) {
+        $entry['blocked_at'] = date('Y-m-d H:i:s');
+    }
+    $data[$key] = $entry;
+    return writeJsonFile(FILE_FREQ_CAP, $data);
+}
+
+/**
+ * Registra uma visualizacao da BLACK para o visitante.
+ * - Ignora acessos dentro de FREQ_CAP_DEDUP_SECONDS (mesmo acesso real).
+ * - Higieniza timestamps vencidos, mas PRESERVA entradas bloqueadas
+ *   (o bloqueio e permanente, nao expira com a janela).
  */
 function freqRecordBlackView($ip, $window = null) {
     if ($window === null) {
         $window = defined('FREQ_CAP_WINDOW') ? FREQ_CAP_WINDOW : 86400;
     }
+    $dedup = defined('FREQ_CAP_DEDUP_SECONDS') ? FREQ_CAP_DEDUP_SECONDS : 5;
     $key = freqVisitorKey($ip);
     $data = readJsonFile(FILE_FREQ_CAP, []);
     if (!is_array($data)) {
@@ -5411,29 +5489,63 @@ function freqRecordBlackView($ip, $window = null) {
     }
     $now = time();
 
-    if (empty($data[$key]) || !is_array($data[$key])) {
-        $data[$key] = [];
-    }
-    $data[$key][] = $now;
+    $entry = isset($data[$key]) ? freqNormalizeEntry($data[$key])
+                                : ['views' => [], 'blocked' => false, 'blocked_at' => null];
 
-    // Higieniza: remove timestamps fora da janela de todas as chaves
-    foreach ($data as $k => $arr) {
-        if (!is_array($arr)) {
-            unset($data[$k]);
-            continue;
-        }
+    // Anti-duplicacao: se a ultima view foi ha poucos segundos, e o mesmo
+    // acesso real (as 2 linhas de log de uma mesma visita). Nao conta de novo.
+    $lastView = !empty($entry['views']) ? (int)max($entry['views']) : 0;
+    if ($lastView && ($now - $lastView) < $dedup) {
+        // ainda assim persiste (mantem estrutura higienizada), mas sem nova view
+    } else {
+        $entry['views'][] = $now;
+    }
+    $data[$key] = $entry;
+
+    // Higieniza todas as chaves
+    foreach ($data as $k => $raw) {
+        $e = freqNormalizeEntry($raw);
         $kept = [];
-        foreach ($arr as $ts) {
+        foreach ($e['views'] as $ts) {
             if (($now - (int)$ts) <= $window) {
                 $kept[] = (int)$ts;
             }
         }
-        if ($kept) {
-            $data[$k] = array_values($kept);
-        } else {
+        $e['views'] = array_values($kept);
+        // Remove a chave apenas se NAO estiver bloqueada e sem views na janela
+        if (empty($e['views']) && empty($e['blocked'])) {
             unset($data[$k]);
+        } else {
+            $data[$k] = $e;
         }
     }
 
+    return writeJsonFile(FILE_FREQ_CAP, $data);
+}
+
+/**
+ * Lista todos os IPs bloqueados permanentemente (para exibicao no painel).
+ */
+function getForceWhiteList() {
+    $data = readJsonFile(FILE_FREQ_CAP, []);
+    if (!is_array($data)) return [];
+    $result = [];
+    foreach ($data as $key => $raw) {
+        $e = freqNormalizeEntry($raw);
+        if (!empty($e['blocked'])) {
+            $result[$key] = $e;
+        }
+    }
+    return $result;
+}
+
+/**
+ * Remove o bloqueio permanente de um visitante (caso de falso-positivo).
+ */
+function removeForceWhite($ip) {
+    $key = freqVisitorKey($ip);
+    $data = readJsonFile(FILE_FREQ_CAP, []);
+    if (!is_array($data) || !isset($data[$key])) return false;
+    unset($data[$key]);
     return writeJsonFile(FILE_FREQ_CAP, $data);
 }
