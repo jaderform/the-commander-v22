@@ -5631,3 +5631,105 @@ function fpTrackAndCountNetworks($fpHash, $ip, $window = null) {
 
     return count($entry);
 }
+
+// ============================================
+// REPUTACAO DE IP (ip-api.com) com CACHE local
+// ============================================
+// Retorna um array com a natureza da conexao do IP:
+//   [ 'hosting' => bool, 'proxy' => bool, 'mobile' => bool,
+//     'as' => 'ASxxxx ...', 'isp' => '...', 'checked' => bool ]
+// 'checked' = false quando nao foi possivel consultar (rede/timeout/limite),
+// para que o chamador NAO bloqueie por falta de dado (fail-open, seguro).
+
+/**
+ * Consulta a reputacao do IP, usando cache local para respeitar o limite
+ * gratuito do ip-api.com (45 req/min) e evitar latencia repetida.
+ */
+function getIpReputation($ip) {
+    $ip = trim((string)$ip);
+    $empty = ['hosting' => false, 'proxy' => false, 'mobile' => false, 'as' => '', 'isp' => '', 'checked' => false];
+    if ($ip === '' || $ip === '0.0.0.0') {
+        return $empty;
+    }
+
+    $ttl = defined('IP_REP_CACHE_TTL') ? IP_REP_CACHE_TTL : 604800;
+    $now = time();
+
+    // 1) Cache
+    $cache = readJsonFile(FILE_IP_REPUTATION, []);
+    if (!is_array($cache)) $cache = [];
+    if (isset($cache[$ip]) && is_array($cache[$ip]) && isset($cache[$ip]['ts'])
+        && ($now - (int)$cache[$ip]['ts']) <= $ttl) {
+        $c = $cache[$ip];
+        return [
+            'hosting' => !empty($c['hosting']),
+            'proxy'   => !empty($c['proxy']),
+            'mobile'  => !empty($c['mobile']),
+            'as'      => (string)($c['as'] ?? ''),
+            'isp'     => (string)($c['isp'] ?? ''),
+            'checked' => true
+        ];
+    }
+
+    // 2) Consulta externa
+    $timeout = defined('IP_REP_TIMEOUT') ? IP_REP_TIMEOUT : 2;
+    $apiKey  = defined('IP_REP_API_KEY') ? IP_REP_API_KEY : '';
+    // Campos: status, proxy, hosting, mobile, as, isp
+    $fields = 'status,message,proxy,hosting,mobile,as,isp,query';
+    if ($apiKey !== '') {
+        // Plano pago (pro): HTTPS + chave
+        $url = 'https://pro.ip-api.com/json/' . urlencode($ip) . '?key=' . urlencode($apiKey) . '&fields=' . $fields;
+    } else {
+        // Plano free: apenas HTTP
+        $url = 'http://ip-api.com/json/' . urlencode($ip) . '?fields=' . $fields;
+    }
+
+    $raw = false;
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_CONNECTTIMEOUT => $timeout,
+            CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; CommanderWAF/1.0)'
+        ]);
+        $raw = curl_exec($ch);
+        curl_close($ch);
+    } else {
+        $ctx = stream_context_create(['http' => ['timeout' => $timeout]]);
+        $raw = @file_get_contents($url, false, $ctx);
+    }
+
+    if ($raw === false || $raw === '') {
+        // Falha de rede: fail-open (nao bloqueia) e nao cacheia
+        return $empty;
+    }
+
+    $j = json_decode($raw, true);
+    if (!is_array($j) || ($j['status'] ?? '') !== 'success') {
+        // Resposta invalida ou limite atingido: fail-open, nao cacheia
+        return $empty;
+    }
+
+    $result = [
+        'hosting' => !empty($j['hosting']),
+        'proxy'   => !empty($j['proxy']),
+        'mobile'  => !empty($j['mobile']),
+        'as'      => (string)($j['as'] ?? ''),
+        'isp'     => (string)($j['isp'] ?? '')
+    ];
+
+    // 3) Salva no cache
+    $cache[$ip] = $result + ['ts' => $now];
+    // Higieniza cache vencido (mantem o arquivo enxuto)
+    foreach ($cache as $k => $v) {
+        if (!is_array($v) || !isset($v['ts']) || ($now - (int)$v['ts']) > $ttl) {
+            unset($cache[$k]);
+        }
+    }
+    $cache[$ip] = $result + ['ts' => $now];
+    writeJsonFile(FILE_IP_REPUTATION, $cache);
+
+    $result['checked'] = true;
+    return $result;
+}

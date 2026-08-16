@@ -304,6 +304,29 @@ define('FP_VELOCITY_WINDOW', 3600);    // janela de contagem, em segundos (3600 
 // Contagem de redes por fingerprint (deteccao de farm).
 define('FILE_FP_VELOCITY', DATA_DIR . 'fp_velocity.json');
 
+// ============================================
+// REPUTACAO DE IP (ip-api.com) - anti datacenter / proxy / VPN
+// ============================================
+// Consulta a natureza da conexao do visitante numa base externa gratuita
+// (ip-api.com). Se for datacenter/hospedagem (hosting) ou proxy/VPN (proxy),
+// o acesso vai direto para a White Page - pega revisores de nuvem que
+// escapam da lista de prefixos. O resultado por IP fica em CACHE local por
+// IP_REP_CACHE_TTL segundos para respeitar o limite gratuito (45 req/min) e
+// nao adicionar latencia a IPs ja conhecidos.
+//
+// ip-api.com free: 45 req/min, SEM chave, apenas HTTP (http://), uso nao
+// comercial. Se um dia migrar para o plano pago (https + chave), basta
+// preencher IP_REP_API_KEY e ajustar IP_REP_ENDPOINT.
+define('IP_REP_ENABLED', true);      // liga/desliga a camada
+define('IP_REP_BLOCK_HOSTING', true); // bloquear datacenter/hospedagem
+define('IP_REP_BLOCK_PROXY', true);   // bloquear proxy/VPN/TOR
+define('IP_REP_CACHE_TTL', 604800);   // validade do cache por IP (7 dias)
+define('IP_REP_TIMEOUT', 2);          // timeout da consulta, em segundos
+define('IP_REP_API_KEY', '');         // vazio = usa o endpoint free (http)
+
+// Cache local das consultas de reputacao (por IP).
+define('FILE_IP_REPUTATION', DATA_DIR . 'ip_reputation.json');
+
 // Criar arquivos padrao das melhorias
 $newDefaultFiles = [
     FILE_WEBHOOKS => '{"telegram":{"enabled":false,"bot_token":"","chat_id":""},"discord":{"enabled":false,"url":""}}',
@@ -313,7 +336,8 @@ $newDefaultFiles = [
     FILE_WAF_LEARNED => '[]',
     FILE_WAF_SCANNERS => '{}',
     FILE_FREQ_CAP => '{}',
-    FILE_FP_VELOCITY => '{}'
+    FILE_FP_VELOCITY => '{}',
+    FILE_IP_REPUTATION => '{}'
 ];
 
 foreach ($newDefaultFiles as $file => $defaultContent) {

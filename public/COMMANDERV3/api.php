@@ -685,6 +685,52 @@ class CommanderAPI {
                     'reason'   => 'waf_datacenter_auto'
                 ]);
             }
+
+            // =====================================================
+            // REPUTACAO DE IP (ip-api.com): datacenter / proxy / VPN
+            // =====================================================
+            // Ultima camada de rede: consulta a natureza da conexao numa base
+            // externa (com cache local). Pega revisores/crawlers que saem de
+            // nuvem ou VPN e escaparam da lista de prefixos e do DNS reverso.
+            // Fail-open: se a consulta falhar, NAO bloqueia (deixa as outras
+            // camadas decidirem). Residencial/movel real nao dispara aqui.
+            // =====================================================
+            if (defined('IP_REP_ENABLED') && IP_REP_ENABLED && function_exists('getIpReputation')) {
+                $rep = getIpReputation($visitorIP);
+                if (!empty($rep['checked'])) {
+                    $blockHosting = defined('IP_REP_BLOCK_HOSTING') ? IP_REP_BLOCK_HOSTING : true;
+                    $blockProxy   = defined('IP_REP_BLOCK_PROXY') ? IP_REP_BLOCK_PROXY : true;
+                    $repHit = '';
+                    if ($blockHosting && !empty($rep['hosting'])) {
+                        $repHit = 'datacenter/hosting';
+                    } elseif ($blockProxy && !empty($rep['proxy'])) {
+                        $repHit = 'proxy/VPN';
+                    }
+                    if ($repHit !== '') {
+                        $repInfo = trim(($rep['as'] ?? '') . ' ' . ($rep['isp'] ?? ''));
+                        $this->logBotAccess($visitorIP, $visitorUA, "Reputacao IP: {$repHit} ({$repInfo}) -> White Page", $campaignId, $utmSource, $platform);
+                        recordHourlyClick(true);
+                        recordClick($campaignId, true, $platform);
+                        logBot([
+                            'ip' => $visitorIP,
+                            'user_agent' => substr($visitorUA, 0, 200),
+                            'reason' => "Reputacao IP ({$repHit}): {$repInfo}",
+                            'result' => 'white',
+                            'campaign' => $campaignSlug,
+                            'campaign_id' => $campaignId,
+                            'platform' => $platform,
+                            'referer' => ''
+                        ]);
+                        jsonResponse([
+                            'action'   => 'white',
+                            'url'      => $campaign['white_url'] ?? '',
+                            'redirect' => $campaign['white_url'] ?? '',
+                            'method'   => $campaign['white_method'] ?? 'redirect',
+                            'reason'   => 'ip_reputation'
+                        ]);
+                    }
+                }
+            }
         }
 
         // =====================================================
