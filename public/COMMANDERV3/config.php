@@ -298,7 +298,7 @@ define('FILE_FREQ_CAP', DATA_DIR . 'freq_cap.json');
 // (contadas por prefixo /64 no IPv6, IP cheio no IPv4) dentro da janela, o
 // fingerprint e considerado farm e vai para force-white permanente.
 define('FP_VELOCITY_ENABLED', true);   // liga/desliga a regra
-define('FP_VELOCITY_MAX_NETS', 4);     // redes distintas com o MESMO fingerprint p/ considerar farm
+define('FP_VELOCITY_MAX_NETS', 3);     // redes distintas com o MESMO fingerprint p/ considerar farm
 define('FP_VELOCITY_WINDOW', 3600);    // janela de contagem, em segundos (3600 = 1h)
 
 // Contagem de redes por fingerprint (deteccao de farm).
