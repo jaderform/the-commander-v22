@@ -3825,7 +3825,7 @@ HTACCESS;
                                     <th>Usado por</th>
                                     <th>Conexão</th>
                                     <th>Status</th>
-                                    <th>A��ões</th>
+                                    <th>Ações</th>
                                 </tr>
                             </thead>
                             <tbody id="domains-table">
