@@ -1756,6 +1756,62 @@ class CommanderAPI {
      * Loga acesso de bot e adiciona à lista de aprendidos
      */
     private function logBotAccess($ip, $userAgent, $reason, $campaignId = '', $utmSource = '', $platform = '') {
+        // ==========================================================
+        // DETALHES RICOS DO ACESSO (para analise de padroes)
+        // Puxa os sinais que o cliente enviou em $this->requestData e grava
+        // junto de cada acesso. Serve para diferenciar humano real de bot
+        // "humano" ao revisar os logs depois. Vale para bots e humanos.
+        // ==========================================================
+        $rd = is_array($this->requestData) ? $this->requestData : [];
+
+        $sw = (int)($rd['screen_width'] ?? 0);
+        $sh = (int)($rd['screen_height'] ?? 0);
+
+        // Fingerprint combinado do device (mesmo criterio da regra anti-farm).
+        // Guardamos so um hash curto para comparar linhas sem inchar o arquivo.
+        $fpHash = '';
+        if (function_exists('buildDeviceFingerprint')) {
+            $fpFull = buildDeviceFingerprint([
+                'canvas_fp'     => $rd['canvas_fp'] ?? '',
+                'webgl_fp'      => $rd['webgl_fp'] ?? '',
+                'audio_fp'      => $rd['audio_fp'] ?? '',
+                'screen_width'  => $sw,
+                'screen_height' => $sh,
+                'timezone'      => $rd['timezone'] ?? '',
+                'platform'      => $rd['platform'] ?? ''
+            ]);
+            $fpHash = $fpFull !== '' ? substr($fpFull, 0, 12) : '';
+        }
+
+        $shortHash = function($v) {
+            $v = trim((string)$v);
+            if ($v === '' || stripos($v, 'err') !== false) return '';
+            return substr(md5($v), 0, 8);
+        };
+
+        $details = [
+            // Ambiente / device
+            'screen'          => ($sw && $sh) ? ($sw . 'x' . $sh) : '',
+            'timezone'        => (string)($rd['timezone'] ?? ''),
+            'languages'       => substr((string)($rd['languages'] ?? ($rd['client_languages'] ?? '')), 0, 60),
+            'platform_js'     => (string)($rd['platform'] ?? ''),
+            'country'         => strtoupper((string)($rd['country'] ?? ($rd['client_country'] ?? ''))),
+            // Sinais de automacao
+            'webdriver'       => !empty($rd['webdriver']) && $rd['webdriver'] !== 'false' ? 1 : 0,
+            'plugins_count'   => isset($rd['plugins_count']) ? (int)$rd['plugins_count'] : -1,
+            'touch_support'   => !empty($rd['touch_support']) && $rd['touch_support'] !== 'false' ? 1 : 0,
+            'bot_score'       => isset($rd['advanced_bot_score']) ? (int)$rd['advanced_bot_score'] : -1,
+            'emulator_score'  => isset($rd['emulator_score']) ? (int)$rd['emulator_score'] : -1,
+            'bot_flags'       => substr((string)($rd['advanced_bot_flags'] ?? ''), 0, 120),
+            // Fingerprints (hash curto para comparar entre linhas)
+            'fp_device'       => $fpHash,
+            'fp_canvas'       => $shortHash($rd['canvas_fp'] ?? ''),
+            'fp_webgl'        => $shortHash($rd['webgl_fp'] ?? ''),
+            'fp_audio'        => $shortHash($rd['audio_fp'] ?? ''),
+            // Origem
+            'referer'         => substr((string)($rd['referer'] ?? ''), 0, 120)
+        ];
+
         // Registra no log de bots
         $logEntry = [
             'timestamp' => date('Y-m-d H:i:s'),
@@ -1764,7 +1820,8 @@ class CommanderAPI {
             'reason' => $reason,
             'campaign_id' => $campaignId,
             'utm_source' => $utmSource,
-            'platform' => $platform
+            'platform' => $platform,
+            'details' => $details
         ];
         
         // Mostra ate 2.000 registros nos Logs de Bots. Ao atingir 2.000, o

@@ -6968,14 +6968,41 @@ function exportLogs() {
         return '"' + s.replace(/"/g, '""') + '"';
     };
 
-    const headers = ['Data/Hora', 'IP', 'Motivo', 'Campanha', 'Plataforma'];
-    const rows = currentLogs.map(log => [
-        escapeCsv(log.timestamp),
-        escapeCsv(log.ip),
-        escapeCsv(log.reason || 'Sem motivo registrado'),
-        escapeCsv(campaignLabel(log)),
-        escapeCsv(log.platform || 'unknown')
-    ].join(','));
+    const headers = [
+        'Data/Hora', 'IP', 'Motivo', 'Campanha', 'Plataforma',
+        // Detalhes ricos do acesso (analise de padroes)
+        'Pais', 'Tela', 'Timezone', 'Idiomas', 'Platform_JS',
+        'Webdriver', 'Plugins', 'Touch', 'Bot_Score', 'Emulator_Score',
+        'Bot_Flags', 'FP_Device', 'FP_Canvas', 'FP_WebGL', 'FP_Audio',
+        'Referer', 'User-Agent'
+    ];
+    const rows = currentLogs.map(log => {
+        const d = log.details || {};
+        return [
+            escapeCsv(log.timestamp),
+            escapeCsv(log.ip),
+            escapeCsv(log.reason || 'Sem motivo registrado'),
+            escapeCsv(campaignLabel(log)),
+            escapeCsv(log.platform || 'unknown'),
+            escapeCsv(d.country || ''),
+            escapeCsv(d.screen || ''),
+            escapeCsv(d.timezone || ''),
+            escapeCsv(d.languages || ''),
+            escapeCsv(d.platform_js || ''),
+            escapeCsv(d.webdriver ?? ''),
+            escapeCsv(d.plugins_count ?? ''),
+            escapeCsv(d.touch_support ?? ''),
+            escapeCsv(d.bot_score ?? ''),
+            escapeCsv(d.emulator_score ?? ''),
+            escapeCsv(d.bot_flags || ''),
+            escapeCsv(d.fp_device || ''),
+            escapeCsv(d.fp_canvas || ''),
+            escapeCsv(d.fp_webgl || ''),
+            escapeCsv(d.fp_audio || ''),
+            escapeCsv(d.referer || ''),
+            escapeCsv(log.ua || '')
+        ].join(',');
+    });
 
     // BOM para o Excel reconhecer acentos corretamente
     const csv = '\uFEFF' + headers.map(escapeCsv).join(',') + '\n' + rows.join('\n');
