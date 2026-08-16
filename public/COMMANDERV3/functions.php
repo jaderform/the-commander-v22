@@ -3839,7 +3839,11 @@ function saveAccessLog($logData) {
         'device' => $logData['device'] ?? '',
         'bot_score' => (int)($logData['bot_score'] ?? 0),
         'bot_flags' => $logData['bot_flags'] ?? '',
-        'url' => substr($logData['url'] ?? '', 0, 500)
+        'url' => substr($logData['url'] ?? '', 0, 500),
+        // Sinais ricos para analise humano x bot (opcionais)
+        'visitor_key' => $logData['visitor_key'] ?? '',
+        'signals' => is_array($logData['signals'] ?? null) ? $logData['signals'] : null,
+        'behavior' => is_array($logData['behavior'] ?? null) ? $logData['behavior'] : null
     ];
     
     // Append ao arquivo do dia
@@ -3857,6 +3861,61 @@ function saveAccessLog($logData) {
     }
     
     file_put_contents($filename, json_encode($existingLogs, JSON_PRETTY_PRINT), LOCK_EX);
+    return true;
+}
+
+/**
+ * Registra o COMPORTAMENTO pos-carregamento de um acesso (o que ele fez:
+ * entrou, rolou, tocou, saiu sem interagir, etc.) e mescla no log de acesso
+ * correspondente (pela visitor_key) do dia. Se nao achar, guarda uma entrada
+ * propria para nao perder o dado. Base para diferenciar humano de bot.
+ */
+function recordBehaviorLog($visitorKey, $campaignSlug, $behavior) {
+    $date = date('Y-m-d');
+    $filename = ACCESS_LOGS_DIR . $date . '.json';
+
+    $behavior = [
+        'outcome'        => substr((string)($behavior['outcome'] ?? ''), 0, 40),   // interacted | no_interaction | left
+        'signal'         => substr((string)($behavior['signal'] ?? ''), 0, 20),    // touch | scroll | gyro | click
+        'time_to_act'    => (int)($behavior['time_to_act'] ?? 0),                   // ms ate 1a interacao
+        'time_on_page'   => (int)($behavior['time_on_page'] ?? 0),                  // ms total ate o beacon
+        'scrolled'       => !empty($behavior['scrolled']) ? 1 : 0,
+        'touched'        => !empty($behavior['touched']) ? 1 : 0,
+        'gyro'           => !empty($behavior['gyro']) ? 1 : 0,
+        'max_scroll'     => (int)($behavior['max_scroll'] ?? 0),                    // % rolado
+        'visibility_lost'=> !empty($behavior['visibility_lost']) ? 1 : 0
+    ];
+
+    if (!file_exists($filename)) {
+        return false;
+    }
+    $logs = json_decode(file_get_contents($filename), true) ?: [];
+    if (empty($logs)) return false;
+
+    // Procura a entrada mais recente com a mesma visitor_key (percorre do fim)
+    $merged = false;
+    for ($i = count($logs) - 1; $i >= 0; $i--) {
+        if (($logs[$i]['visitor_key'] ?? '') !== '' && ($logs[$i]['visitor_key'] ?? '') === $visitorKey) {
+            $logs[$i]['behavior'] = $behavior;
+            $merged = true;
+            break;
+        }
+    }
+
+    // Nao achou (ex.: gate sem log previo): cria entrada leve so com comportamento
+    if (!$merged) {
+        $logs[] = [
+            'timestamp'     => date('Y-m-d H:i:s'),
+            'campaign_slug' => $campaignSlug,
+            'ip_masked'     => '',
+            'result'        => 'behavior_only',
+            'reason'        => 'Comportamento (sem log de decisao correlacionado)',
+            'visitor_key'   => $visitorKey,
+            'behavior'      => $behavior
+        ];
+    }
+
+    file_put_contents($filename, json_encode($logs, JSON_PRETTY_PRINT), LOCK_EX);
     return true;
 }
 

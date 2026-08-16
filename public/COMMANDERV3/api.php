@@ -200,6 +200,28 @@ if ((isset($_GET['action']) && $_GET['action'] === 'log') ||
     exit;
 }
 
+// =============================================
+// ENDPOINT: registro de COMPORTAMENTO pos-carregamento
+// Chamado via sendBeacon do Gate de Interacao (?action=behavior_log)
+// Registra o que o acesso fez: entrou, rolou, tocou, saiu sem interagir.
+// =============================================
+if (isset($_GET['action']) && $_GET['action'] === 'behavior_log') {
+    header('Content-Type: application/json');
+    $b = json_decode(file_get_contents('php://input'), true);
+    if (!is_array($b)) { $b = $_POST; }
+    $visitorKey = preg_replace('/[^a-zA-Z0-9]/', '', (string)($b['visitor_key'] ?? ''));
+    $slug = preg_replace('/[^a-zA-Z0-9_\-]/', '', (string)($b['campaign_slug'] ?? ''));
+    if ($visitorKey === '') {
+        echo json_encode(['error' => 'visitor_key required']);
+        exit;
+    }
+    if (function_exists('recordBehaviorLog')) {
+        recordBehaviorLog($visitorKey, $slug, $b);
+    }
+    echo json_encode(['success' => true]);
+    exit;
+}
+
 /**
  * Classe principal da API
  */
@@ -1541,8 +1563,118 @@ class CommanderAPI {
                 'campaign' => $campaignSlug
             ];
         }
-        
+
+        // =====================================================
+        // ANALYTICS: registra ESTE acesso com sinais ricos
+        // =====================================================
+        // Alimenta a aba Analytics (antes so o Log de Bots era gravado). Guarda
+        // todos os sinais coletados para analise posterior de humano x bot.
+        $this->recordAnalyticsAccess([
+            'campaign_slug' => $campaignSlug,
+            'result'        => $isBot ? 'white' : 'black',
+            'is_bot'        => $isBot,
+            'reason'        => $isBot ? $blockReason : 'Visitante real -> BLACK',
+            'risk_score'    => $riskScore,
+            'risk_factors'  => is_array($riskFactors) ? $riskFactors : [],
+            'platform'      => $platform,
+            'referer'       => $referer,
+            'clientData'    => is_array($clientData) ? $clientData : []
+        ], $visitorIP, $visitorUA);
+
         $this->respond($response);
+    }
+
+    /**
+     * Registra um acesso na base de Analytics com TODOS os sinais coletados.
+     * Chamado no fim de cada decisao e nos desvios de rede (datacenter/reputacao).
+     * Serve para diferenciar humano real de bot "humano" na analise posterior.
+     */
+    private function recordAnalyticsAccess($info, $ip, $userAgent) {
+        if (!function_exists('saveAccessLog')) {
+            return;
+        }
+        $rd = is_array($this->requestData) ? $this->requestData : [];
+        $cd = is_array($info['clientData'] ?? null) ? $info['clientData'] : [];
+
+        $sw = (int)($rd['screen_width'] ?? ($cd['screen_width'] ?? 0));
+        $sh = (int)($rd['screen_height'] ?? ($cd['screen_height'] ?? 0));
+
+        $shortHash = function($v) {
+            $v = trim((string)$v);
+            if ($v === '' || stripos($v, 'err') !== false) return '';
+            return substr(md5($v), 0, 8);
+        };
+
+        // Fingerprint de device (mesmo criterio da regra anti-farm)
+        $fpDevice = '';
+        if (function_exists('buildDeviceFingerprint')) {
+            $full = buildDeviceFingerprint([
+                'canvas_fp'     => $rd['canvas_fp'] ?? '',
+                'webgl_fp'      => $rd['webgl_fp'] ?? '',
+                'audio_fp'      => $rd['audio_fp'] ?? '',
+                'screen_width'  => $sw,
+                'screen_height' => $sh,
+                'timezone'      => $rd['timezone'] ?? ($cd['timezone'] ?? ''),
+                'platform'      => $rd['platform'] ?? ($cd['platform'] ?? '')
+            ]);
+            $fpDevice = $full !== '' ? substr($full, 0, 12) : '';
+        }
+
+        // Chave de visitante (para correlacionar com o comportamento do gate)
+        $visitorKey = $rd['visitor_id'] ?? '';
+        if ($visitorKey === '') {
+            $visitorKey = substr(md5(($fpDevice ?: $userAgent) . '|' . $ip), 0, 16);
+        }
+
+        // Mascara de IP para exibicao
+        $ipMasked = $ip;
+        if (strpos($ip, '.') !== false && strrpos($ip, '.') !== false) {
+            $ipMasked = substr($ip, 0, strrpos($ip, '.')) . '.xxx';
+        } elseif (strpos($ip, ':') !== false) {
+            $parts = explode(':', $ip);
+            $ipMasked = implode(':', array_slice($parts, 0, 3)) . '::xxxx';
+        }
+
+        $device = 'desktop';
+        $touch = (!empty($rd['touch_support']) && $rd['touch_support'] !== 'false') ? 1 : 0;
+        if ($touch || stripos($userAgent, 'mobile') !== false || stripos($userAgent, 'android') !== false || stripos($userAgent, 'iphone') !== false) {
+            $device = 'mobile';
+        }
+
+        $signals = [
+            'screen'         => ($sw && $sh) ? ($sw . 'x' . $sh) : '',
+            'timezone'       => (string)($rd['timezone'] ?? ($cd['timezone'] ?? '')),
+            'languages'      => substr((string)($rd['languages'] ?? ($cd['languages'] ?? '')), 0, 60),
+            'platform_js'    => (string)($rd['platform'] ?? ($cd['platform'] ?? '')),
+            'webdriver'      => (!empty($rd['webdriver']) && $rd['webdriver'] !== 'false') ? 1 : 0,
+            'plugins_count'  => isset($rd['plugins_count']) ? (int)$rd['plugins_count'] : -1,
+            'touch_support'  => $touch,
+            'hw_concurrency' => isset($rd['hardware_concurrency']) ? (int)$rd['hardware_concurrency'] : -1,
+            'device_memory'  => isset($rd['device_memory']) ? (string)$rd['device_memory'] : '',
+            'bot_score'      => isset($rd['advanced_bot_score']) ? (int)$rd['advanced_bot_score'] : -1,
+            'emulator_score' => isset($rd['emulator_score']) ? (int)$rd['emulator_score'] : -1,
+            'bot_flags'      => substr((string)($rd['advanced_bot_flags'] ?? ''), 0, 150),
+            'fp_device'      => $fpDevice,
+            'fp_canvas'      => $shortHash($rd['canvas_fp'] ?? ''),
+            'fp_webgl'       => $shortHash($rd['webgl_fp'] ?? ''),
+            'fp_audio'       => $shortHash($rd['audio_fp'] ?? ''),
+            'has_ads_params' => !empty($info['has_ads_params']) ? 1 : 0
+        ];
+
+        saveAccessLog([
+            'campaign_slug' => $info['campaign_slug'] ?? '',
+            'ip_masked'     => $ipMasked,
+            'user_agent'    => $userAgent,
+            'referer'       => $info['referer'] ?? '',
+            'result'        => $info['result'] ?? 'unknown',
+            'reason'        => $info['reason'] ?? '',
+            'country'       => strtoupper((string)($rd['country'] ?? ($cd['country'] ?? ''))),
+            'device'        => $device,
+            'bot_score'     => (int)($info['risk_score'] ?? 0),
+            'bot_flags'     => implode(',', $info['risk_factors'] ?? []),
+            'visitor_key'   => $visitorKey,
+            'signals'       => $signals
+        ]);
     }
     
     /**
