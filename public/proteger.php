@@ -5,6 +5,18 @@
  */
 
 if (session_status() === PHP_SESSION_NONE) {
+    // Hardening de cookie de sessao
+    $__https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+        || (($_SERVER['SERVER_PORT'] ?? '') == 443)
+        || (strtolower($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+    @ini_set('session.use_strict_mode', '1');
+    session_set_cookie_params([
+        'lifetime' => 0,
+        'path' => '/',
+        'httponly' => true,
+        'samesite' => 'Lax',
+        'secure' => $__https,
+    ]);
     session_start();
 }
 
@@ -23,7 +35,7 @@ if (isset($_SESSION['login_time']) && (time() - $_SESSION['login_time']) > 7200)
 
 // Disponibiliza dados do usuario logado
 $GLOBALS['usuario_logado'] = [
-    'email' => $_SESSION['usuario_email'] ?? '',
+    'email' => $_SESSION['usuario_email'] ?? ($_SESSION['email'] ?? ''),
     'nome' => $_SESSION['usuario_nome'] ?? '',
     'eh_admin' => $_SESSION['eh_admin'] ?? false,
     'utm_cloaker_ativo' => $_SESSION['utm_cloaker_ativo'] ?? false

@@ -1,55 +1,137 @@
+
 <?php
 /**
- * COMMANDER V10.5 - Arquivo de Configuração Central
- * 
- * INSTRUÇÕES: Crie este arquivo na raiz do COMMANDER
- * V10.5: Adicionado MOBILE_ONLY_MODE e thresholds ajustados
+ * COMMANDER V10.5 - Configuracao Central
+ *
+ * Revisao:
+ * - Validacao de segredo HMAC
+ * - Persistencia JSON com gravacao atomica
+ * - Tratamento de erros de leitura e escrita
+ * - Protecao contra sobrescrita de arquivos
+ * - Compatibilidade com constantes existentes
+ *
+ * Requer PHP 7.4+.
  */
 
-// Previne acesso direto
 if (!defined('COMMANDER_ACCESS')) {
     http_response_code(403);
     exit('Acesso negado');
 }
 
 // ============================================
-// CONFIGURAÇÕES DO SISTEMA
+// SISTEMA
 // ============================================
 
 define('COMMANDER_VERSION', '10.5');
 define('COMMANDER_NAME', 'COMMANDER');
 
-// Timezone
 date_default_timezone_set('America/Sao_Paulo');
 
 // ============================================
-// CONFIGURAÇÕES DE SEGURANÇA
+// DEBUG E TRATAMENTO DE ERROS
 // ============================================
 
-// Token de API (altere para um valor único e seguro)
-define('API_TOKEN', 'seu_token_secreto_aqui_' . md5(__DIR__));
+define('DEBUG_MODE', false);
+define('LOG_ALL_REQUESTS', false);
 
-// Senha do painel (será hasheada automaticamente)
-define('ADMIN_PASSWORD', 'SuaSenhaForte123!');
+if (!DEBUG_MODE) {
+    ini_set('display_errors', '0');
+    ini_set('log_errors', '1');
+}
 
-// Tempo de sessão em segundos (4 horas)
-define('SESSION_TIMEOUT', 14400);
+// ============================================
+// SEGURANCA - SEGREDO HMAC
+// ============================================
 
-// Máximo de tentativas de login antes de bloquear
+/**
+ * Ordem de carregamento:
+ *
+ * 1. COMMANDER_API_TOKEN (ambiente)
+ * 2. $_SERVER['COMMANDER_API_TOKEN']
+ * 3. COMMANDER_SECRET_FILE
+ *
+ * O fallback previsivel foi removido.
+ *
+ * IMPORTANTE:
+ * Configure um segredo persistente de pelo
+ * menos 32 caracteres antes da implantacao.
+ */
+
+if (!defined('API_TOKEN')) {
+    $cmdToken = getenv('COMMANDER_API_TOKEN');
+
+    if (
+        (!is_string($cmdToken) || strlen($cmdToken) < 32)
+        && isset($_SERVER['COMMANDER_API_TOKEN'])
+        && is_string($_SERVER['COMMANDER_API_TOKEN'])
+    ) {
+        $cmdToken = $_SERVER['COMMANDER_API_TOKEN'];
+    }
+
+    if (!is_string($cmdToken) || strlen($cmdToken) < 32) {
+        $secretFile = getenv('COMMANDER_SECRET_FILE');
+
+        if (!is_string($secretFile) || $secretFile === '') {
+            $secretFile = '/etc/commander/api_token';
+        }
+
+        if (is_file($secretFile) && is_readable($secretFile)) {
+            $fileContent = @file_get_contents($secretFile);
+            $cmdToken = $fileContent !== false
+                ? trim($fileContent)
+                : '';
+        }
+    }
+
+    if (!is_string($cmdToken) || strlen($cmdToken) < 32) {
+        error_log(
+            '[COMMANDER] ERRO: segredo HMAC ausente ou invalido.'
+        );
+
+        if (PHP_SAPI === 'cli') {
+            throw new RuntimeException(
+                'Configure COMMANDER_API_TOKEN com 32+ caracteres.'
+            );
+        }
+
+        http_response_code(503);
+        exit('Falha na configuracao do servidor.');
+    }
+
+    define('API_TOKEN', $cmdToken);
+    unset($cmdToken, $secretFile, $fileContent);
+}
+
+if (!defined('API_TOKEN_IS_LEGACY')) {
+    define('API_TOKEN_IS_LEGACY', false);
+}
+
+// ============================================
+// AUTENTICACAO E SESSOES
+// ============================================
+
+// O login efetivo depende de proteger.php.
+define(
+    'ADMIN_PASSWORD',
+    (string) (getenv('COMMANDER_ADMIN_PASSWORD') ?: '')
+);
+
+define('SESSION_TIMEOUT', 7200);
 define('MAX_LOGIN_ATTEMPTS', 5);
-
-// Tempo de bloqueio após tentativas excedidas (em segundos)
-define('LOGIN_BLOCK_TIME', 900); // 15 minutos
+define('LOGIN_BLOCK_TIME', 900);
 
 // ============================================
-// CONFIGURAÇÕES DE ARQUIVOS
+// DIRETORIOS
 // ============================================
 
 define('DATA_DIR', __DIR__ . '/data/');
 define('LOGS_DIR', __DIR__ . '/logs/');
 define('CACHE_DIR', __DIR__ . '/cache/');
 
-// Arquivos de dados
+// ============================================
+// ARQUIVOS PRINCIPAIS
+// ============================================
+
 define('FILE_CAMPAIGNS', DATA_DIR . 'campaigns.json');
 define('FILE_STATS', DATA_DIR . 'stats.json');
 define('FILE_BLOCKED_IPS', DATA_DIR . 'blocked_ips.json');
@@ -59,100 +141,167 @@ define('FILE_ACCESS_LOG', LOGS_DIR . 'access_log.json');
 define('FILE_LOGIN_ATTEMPTS', DATA_DIR . 'login_attempts.json');
 
 // ============================================
-// CONFIGURAÇÕES DE DETECÇÃO
+// CONFIGURACOES DE DETECCAO EXISTENTES
 // ============================================
 
-// Países permitidos (ISO 3166-1 alpha-2)
+// Valores preservados da instalacao original.
 define('ALLOWED_COUNTRIES', ['BR']);
-
-// Habilitar geo-blocking
 define('GEO_BLOCKING_ENABLED', true);
 
-// ============================================
-// V10.5: MODO APENAS MOBILE
-// ============================================
-// Se true, desktop vai automaticamente para WHITE
-// Revisores usam desktop, usuarios reais usam celular
 define('MOBILE_ONLY_MODE', true);
-
-// Threshold de risco para bloquear (60 = equilibrado)
-// Valores mais altos = menos bloqueios (menos falsos positivos)
-// Valores mais baixos = mais bloqueios (mais seguro, mas pode bloquear usuarios reais)
 define('RISK_THRESHOLD', 60);
-
-// Bloquear User-Agent vazio
 define('BLOCK_EMPTY_UA', true);
-
-// Tamanho mínimo do User-Agent
 define('MIN_UA_LENGTH', 20);
 
 // ============================================
-// CONFIGURAÇÕES DE RATE LIMITING
+// RATE LIMITING
 // ============================================
 
-// Máximo de requisições por IP por minuto
 define('RATE_LIMIT_REQUESTS', 60);
-
-// Tempo da janela de rate limiting (em segundos)
 define('RATE_LIMIT_WINDOW', 60);
 
 // ============================================
-// DETECCAO DE ABUSO -> DESAFIO (Cloudflare Turnstile)
+// DESAFIO DE ABUSO
 // ============================================
-// Limite "suave" de requisicoes por IP dentro da janela de rate limiting.
-// Fica ABAIXO do RATE_LIMIT_REQUESTS (bloqueio rigido): ao atingir esse valor,
-// o visitante ainda nao e bloqueado, mas passa a ser tratado como comportamento
-// anormal e recebe o desafio (captcha) antes de ser liberado para a oferta.
-define('ABUSE_SOFT_REQUESTS', 25);
 
-// Validade (em segundos) do "passe" emitido apos resolver o desafio.
-// Enquanto valido, o visitante nao e desafiado de novo nas etapas seguintes.
+define('ABUSE_SOFT_REQUESTS', 25);
 define('CHALLENGE_PASS_TTL', 1800);
 
 // ============================================
-// CONFIGURAÇÕES DE CACHE
+// CACHE
 // ============================================
 
-// Tempo de cache para verificação de geo (em segundos)
 define('GEO_CACHE_TIME', 3600);
-
-// Tempo de cache para estatísticas (em segundos)
 define('STATS_CACHE_TIME', 300);
 
 // ============================================
-// CONFIGURAÇÕES DE INTEGRAÇÃO
+// INTEGRACOES
 // ============================================
 
-// APIs de terceiros
 define('TIKTOK_API_VERSION', 'v1.3');
 define('FACEBOOK_API_VERSION', 'v18.0');
 
 // ============================================
-// CONFIGURAÇÕES DE DEBUG
+// INICIALIZACAO DE DIRETORIOS
 // ============================================
 
-// Habilitar modo debug (DESABILITE EM PRODUÇÃO!)
-define('DEBUG_MODE', false);
+/**
+ * Cria diretorio apenas quando necessario.
+ * Nunca remove ou recria pastas existentes.
+ */
+function commanderConfigEnsureDir($directory)
+{
+    if (is_dir($directory)) {
+        return true;
+    }
 
-// Log de todas as requisições
-define('LOG_ALL_REQUESTS', false);
+    if (@mkdir($directory, 0755, true)) {
+        return true;
+    }
 
-// ============================================
-// INICIALIZAÇÃO
-// ============================================
+    if (is_dir($directory)) {
+        return true;
+    }
 
-// Criar diretórios se não existirem
-$directories = [DATA_DIR, LOGS_DIR, CACHE_DIR];
-foreach ($directories as $dir) {
-    if (!is_dir($dir)) {
-        mkdir($dir, 0755, true);
+    error_log(
+        '[COMMANDER] Falha ao criar diretorio: ' . $directory
+    );
+
+    return false;
+}
+
+/**
+ * Escreve todos os bytes de uma string.
+ */
+function commanderConfigWriteAll($handle, $content)
+{
+    $length = strlen($content);
+    $offset = 0;
+
+    while ($offset < $length) {
+        $written = @fwrite(
+            $handle,
+            substr($content, $offset)
+        );
+
+        if ($written === false || $written === 0) {
+            return false;
+        }
+
+        $offset += $written;
+    }
+
+    return true;
+}
+
+/**
+ * Cria arquivos padrao sem sobrescrever existentes.
+ *
+ * O modo x impede substituir um arquivo
+ * criado simultaneamente por outra requisicao.
+ */
+function commanderConfigEnsureFiles($files)
+{
+    foreach ($files as $file => $defaultContent) {
+        if (is_file($file)) {
+            continue;
+        }
+
+        if (!commanderConfigEnsureDir(dirname($file))) {
+            continue;
+        }
+
+        $handle = @fopen($file, 'x');
+
+        if ($handle === false) {
+            if (!is_file($file)) {
+                error_log(
+                    '[COMMANDER] Nao foi possivel criar: ' . $file
+                );
+            }
+            continue;
+        }
+
+        $ok = false;
+
+        try {
+            if (@flock($handle, LOCK_EX)) {
+                $ok = commanderConfigWriteAll(
+                    $handle,
+                    (string) $defaultContent
+                );
+
+                if ($ok) {
+                    $ok = @fflush($handle);
+                }
+
+                @flock($handle, LOCK_UN);
+            }
+        } finally {
+            fclose($handle);
+        }
+
+        if (!$ok) {
+            @unlink($file);
+            error_log(
+                '[COMMANDER] Gravacao inicial incompleta: ' . $file
+            );
+        }
     }
 }
 
-// Criar arquivos padrão se não existirem
+foreach ([DATA_DIR, LOGS_DIR, CACHE_DIR] as $directory) {
+    commanderConfigEnsureDir($directory);
+}
+
+// ============================================
+// ARQUIVOS PADRAO
+// ============================================
+
 $defaultFiles = [
     FILE_CAMPAIGNS => '[]',
-    FILE_STATS => '{"total_clicks":0,"total_blocks":0,"total_passes":0,"by_campaign":{},"by_date":{},"by_platform":{}}',
+    FILE_STATS =>
+        '{"total_clicks":0,"total_blocks":0,"total_passes":0,"by_campaign":{},"by_date":{},"by_platform":{}}',
     FILE_BLOCKED_IPS => '[]',
     FILE_WHITELIST_IPS => '[]',
     FILE_BOT_LOG => '[]',
@@ -160,162 +309,391 @@ $defaultFiles = [
     FILE_LOGIN_ATTEMPTS => '{}'
 ];
 
-foreach ($defaultFiles as $file => $defaultContent) {
-    if (!file_exists($file)) {
-        file_put_contents($file, $defaultContent);
-    }
-}
+commanderConfigEnsureFiles($defaultFiles);
 
 // ============================================
-// FUNÇÕES DE CONFIGURAÇÃO
+// CONFIGURACAO DINAMICA
 // ============================================
 
 /**
- * Obtém configuração dinâmica do arquivo de settings
+ * Consulta uma configuracao armazenada.
+ *
+ * Mantem cache durante o request.
+ * O cache e invalidado apos setConfig().
  */
-function getConfig($key, $default = null) {
+function getConfig($key, $default = null)
+{
     static $config = null;
-    
+
+    if (!is_string($key) && !is_int($key)) {
+        return $default;
+    }
+
+    if (!empty($GLOBALS['__commander_settings_dirty'])) {
+        $config = null;
+        $GLOBALS['__commander_settings_dirty'] = false;
+    }
+
     if ($config === null) {
         $configFile = DATA_DIR . 'settings.json';
-        if (file_exists($configFile)) {
-            $config = json_decode(file_get_contents($configFile), true) ?: [];
-        } else {
-            $config = [];
+        $config = [];
+
+        if (is_file($configFile)) {
+            $content = @file_get_contents($configFile);
+
+            if ($content !== false && trim($content) !== '') {
+                $decoded = json_decode($content, true);
+
+                if (
+                    json_last_error() === JSON_ERROR_NONE
+                    && is_array($decoded)
+                ) {
+                    $config = $decoded;
+                } else {
+                    error_log(
+                        '[COMMANDER] settings.json invalido: '
+                        . json_last_error_msg()
+                    );
+                }
+            }
         }
     }
-    
+
     return $config[$key] ?? $default;
 }
 
 /**
- * Salva configuração dinâmica
+ * Salva uma configuracao sem sobrescrever
+ * as demais chaves.
+ *
+ * Usa:
+ * - lock persistente entre requisicoes
+ * - validacao de JSON
+ * - arquivo temporario no mesmo diretorio
+ * - rename atomico
+ *
+ * Nao substitui um JSON corrompido por [].
  */
-function setConfig($key, $value) {
-    $configFile = DATA_DIR . 'settings.json';
-    $config = [];
-    
-    if (file_exists($configFile)) {
-        $config = json_decode(file_get_contents($configFile), true) ?: [];
+function setConfig($key, $value)
+{
+    if (
+        (!is_string($key) && !is_int($key))
+        || $key === ''
+    ) {
+        return false;
     }
-    
-    $config[$key] = $value;
-    return file_put_contents($configFile, json_encode($config, JSON_PRETTY_PRINT));
+
+    if (!commanderConfigEnsureDir(DATA_DIR)) {
+        return false;
+    }
+
+    $configFile = DATA_DIR . 'settings.json';
+    $lockFile = DATA_DIR . 'settings.json.lock';
+
+    $lock = @fopen($lockFile, 'c');
+
+    if ($lock === false) {
+        error_log('[COMMANDER] Falha ao abrir lock de settings.');
+        return false;
+    }
+
+    if (!@flock($lock, LOCK_EX)) {
+        fclose($lock);
+        return false;
+    }
+
+    $tmpFile = false;
+
+    try {
+        $config = [];
+
+        if (is_file($configFile)) {
+            $original = @file_get_contents($configFile);
+
+            if ($original === false) {
+                error_log(
+                    '[COMMANDER] Falha ao ler settings.json.'
+                );
+                return false;
+            }
+
+            if (trim($original) !== '') {
+                $decoded = json_decode($original, true);
+
+                if (
+                    json_last_error() !== JSON_ERROR_NONE
+                    || !is_array($decoded)
+                ) {
+                    error_log(
+                        '[COMMANDER] JSON invalido: escrita cancelada.'
+                    );
+                    return false;
+                }
+
+                $config = $decoded;
+            }
+        }
+
+        $config[$key] = $value;
+
+        $json = json_encode(
+            $config,
+            JSON_PRETTY_PRINT
+            | JSON_UNESCAPED_UNICODE
+            | JSON_UNESCAPED_SLASHES
+        );
+
+        if ($json === false) {
+            error_log(
+                '[COMMANDER] Erro ao codificar settings: '
+                . json_last_error_msg()
+            );
+            return false;
+        }
+
+        $tmpFile = @tempnam(
+            DATA_DIR,
+            '.settings_'
+        );
+
+        if ($tmpFile === false) {
+            return false;
+        }
+
+        $handle = @fopen($tmpFile, 'wb');
+
+        if ($handle === false) {
+            return false;
+        }
+
+        $writtenOk = false;
+
+        try {
+            $writtenOk = commanderConfigWriteAll(
+                $handle,
+                $json
+            );
+
+            if ($writtenOk) {
+                $writtenOk = @fflush($handle);
+            }
+        } finally {
+            fclose($handle);
+        }
+
+        if (!$writtenOk) {
+            error_log(
+                '[COMMANDER] Falha na escrita de settings.'
+            );
+            return false;
+        }
+
+        // Arquivo de configuracoes pode conter segredos.
+        @chmod($tmpFile, 0600);
+
+        if (!@rename($tmpFile, $configFile)) {
+            error_log(
+                '[COMMANDER] Falha ao substituir settings.json.'
+            );
+            return false;
+        }
+
+        $tmpFile = false;
+
+        $GLOBALS['__commander_settings_dirty'] = true;
+
+        return true;
+    } finally {
+        if ($tmpFile !== false && is_file($tmpFile)) {
+            @unlink($tmpFile);
+        }
+
+        @flock($lock, LOCK_UN);
+        fclose($lock);
+    }
 }
 
 // ============================================
-// V10.4 - NOVAS CONFIGURACOES (MELHORIAS)
+// DETECCAO AVANCADA - CONSTANTES ORIGINAIS
 // ============================================
 
-// Deteccao Avancada de Bots
 define('ADVANCED_DETECTION_ENABLED', true);
 define('JS_CHALLENGE_ENABLED', true);
 define('MIN_LOAD_TIME_MS', 500);
 define('FINGERPRINT_ENABLED', true);
 define('MOUSE_DETECTION_ENABLED', true);
 
-// Webhooks (Telegram e Discord)
+// ============================================
+// WEBHOOKS
+// ============================================
+
 define('WEBHOOK_TELEGRAM_ENABLED', false);
 define('WEBHOOK_TELEGRAM_BOT_TOKEN', '');
 define('WEBHOOK_TELEGRAM_CHAT_ID', '');
+
 define('WEBHOOK_DISCORD_ENABLED', false);
 define('WEBHOOK_DISCORD_URL', '');
-define('WEBHOOK_ALERT_THRESHOLD', 50); // Alerta se taxa de bloqueio > 50%
 
-// Rotacao de URLs / A/B Testing
+define('WEBHOOK_ALERT_THRESHOLD', 50);
+
+// ============================================
+// ROTACAO DE URLS / A-B TESTING
+// ============================================
+
 define('URL_ROTATION_ENABLED', false);
-define('URL_ROTATION_MODE', 'weight'); // weight, sequential, random
+define('URL_ROTATION_MODE', 'weight');
 
-// Pausa Automatica de Campanhas
+// ============================================
+// PAUSA AUTOMATICA
+// ============================================
+
 define('AUTO_PAUSE_ENABLED', false);
-define('AUTO_PAUSE_BLOCK_THRESHOLD', 80); // Pausa se bloqueio > 80%
-define('AUTO_PAUSE_MIN_CLICKS', 100); // Minimo de cliques antes de avaliar
+define('AUTO_PAUSE_BLOCK_THRESHOLD', 80);
+define('AUTO_PAUSE_MIN_CLICKS', 100);
 
-// Graficos e Dashboard
+// ============================================
+// GRAFICOS
+// ============================================
+
 define('CHARTS_ENABLED', true);
 define('CHARTS_DAYS_HISTORY', 30);
 
 // ============================================
-// V10.5 - STEALTH MODE (MODO FURTIVO)
+// CONFIGURACOES LEGADAS DE EXIBICAO
 // ============================================
-// DESABILITADO para funcionamento direto (bot=white, humano=black)
+
+// Mantidas sem alteracao de comportamento.
 define('STEALTH_MODE_ENABLED', false);
 
-// Behavioral Gate - Exige comportamento humano antes de mostrar black
 define('BEHAVIORAL_GATE_ENABLED', false);
-define('BEHAVIORAL_MIN_SCROLLS', 2);          // Minimo de scrolls
-define('BEHAVIORAL_MIN_TIME_MS', 3000);       // 3 segundos
-define('BEHAVIORAL_MIN_MOUSE_MOVES', 5);      // Minimo de movimentos de mouse
-define('BEHAVIORAL_MIN_VISITS', 1);           // 1 visita ja basta (nao precisa recarregar)
+define('BEHAVIORAL_MIN_SCROLLS', 2);
+define('BEHAVIORAL_MIN_TIME_MS', 3000);
+define('BEHAVIORAL_MIN_MOUSE_MOVES', 5);
+define('BEHAVIORAL_MIN_VISITS', 1);
 
-// Progressive Reveal - Mostra teaser antes da black completa
+define('INTERACTION_GATE_GLOBAL', true);
+define('INTERACTION_GATE_GLOBAL_TIMEOUT_MS', 2500);
+
+define('AUTO_FORCE_WHITE_ON_BLOCK', true);
+define('AUTO_FORCE_WHITE_INCLUDE_DESKTOP', true);
+define('AUTO_FORCE_WHITE_INCLUDE_SPLIT', false);
+
 define('PROGRESSIVE_REVEAL_ENABLED', true);
-
-// Risk Score - Limite para bloquear visitante suspeito
-define('RISK_SCORE_THRESHOLD', 70); // 0-100, quanto maior mais restritivo
-
-// Time-based - Mais conservador em horario comercial
+define('RISK_SCORE_THRESHOLD', 70);
 define('TIME_BASED_PROTECTION', true);
-
-// Coletar fingerprints de revisores
 define('COLLECT_REVIEWER_FP', true);
 
-// Arquivos de dados das melhorias
+// ============================================
+// ARQUIVOS DAS MELHORIAS
+// ============================================
+
 define('FILE_WEBHOOKS', DATA_DIR . 'webhooks.json');
 define('FILE_URL_ROTATION', DATA_DIR . 'url_rotation.json');
 define('FILE_ADVANCED_STATS', DATA_DIR . 'advanced_stats.json');
 define('FILE_HOURLY_STATS', DATA_DIR . 'hourly_stats.json');
 
-// Prefixos de IP aprendidos automaticamente pelo WAF via DNS reverso
-// (ByteDance/TikTok/datacenters detectados sozinhos, sem cadastro manual)
-define('FILE_WAF_LEARNED', DATA_DIR . 'waf_learned_prefixes.json');
+define(
+    'FILE_WAF_LEARNED',
+    DATA_DIR . 'waf_learned_prefixes.json'
+);
 
-// IPs marcados como "scanner" (bateram sem UTM em varias campanhas em
-// poucos segundos) - uma vez marcados, nunca mais viram BLACK.
-define('FILE_WAF_SCANNERS', DATA_DIR . 'waf_scanners.json');
+define(
+    'FILE_WAF_SCANNERS',
+    DATA_DIR . 'waf_scanners.json'
+);
 
-// Criar arquivos padrao das melhorias
+// ============================================
+// FREQUENCY CAP
+// ============================================
+
+define('FREQ_CAP_ENABLED', true);
+define('FREQ_CAP_MAX', 2);
+define('FREQ_CAP_WINDOW', 86400);
+
+define('FILE_FREQ_CAP', DATA_DIR . 'freq_cap.json');
+
+// ============================================
+// FINGERPRINT VELOCITY
+// ============================================
+
+define('FP_VELOCITY_ENABLED', true);
+define('FP_VELOCITY_MAX_NETS', 3);
+define('FP_VELOCITY_WINDOW', 3600);
+
+define('FILE_FP_VELOCITY', DATA_DIR . 'fp_velocity.json');
+
+// ============================================
+// REPUTACAO DE IP
+// ============================================
+
+define('IP_REP_ENABLED', true);
+define('IP_REP_BLOCK_HOSTING', true);
+define('IP_REP_BLOCK_PROXY', true);
+define('IP_REP_CACHE_TTL', 604800);
+define('IP_REP_TIMEOUT', 2);
+define('IP_REP_API_KEY', '');
+
+define(
+    'FILE_IP_REPUTATION',
+    DATA_DIR . 'ip_reputation.json'
+);
+
+// ============================================
+// ARQUIVOS PADRAO DAS MELHORIAS
+// ============================================
+
 $newDefaultFiles = [
-    FILE_WEBHOOKS => '{"telegram":{"enabled":false,"bot_token":"","chat_id":""},"discord":{"enabled":false,"url":""}}',
+    FILE_WEBHOOKS =>
+        '{"telegram":{"enabled":false,"bot_token":"","chat_id":""},"discord":{"enabled":false,"url":""}}',
+
     FILE_URL_ROTATION => '{}',
-    FILE_ADVANCED_STATS => '{"by_hour":{},"js_challenges":{"passed":0,"failed":0},"fingerprints":{}}',
+
+    FILE_ADVANCED_STATS =>
+        '{"by_hour":{},"js_challenges":{"passed":0,"failed":0},"fingerprints":{}}',
+
     FILE_HOURLY_STATS => '{}',
     FILE_WAF_LEARNED => '[]',
-    FILE_WAF_SCANNERS => '{}'
+    FILE_WAF_SCANNERS => '{}',
+    FILE_FREQ_CAP => '{}',
+    FILE_FP_VELOCITY => '{}',
+    FILE_IP_REPUTATION => '{}'
 ];
 
-foreach ($newDefaultFiles as $file => $defaultContent) {
-    if (!file_exists($file)) {
-        file_put_contents($file, $defaultContent);
-    }
-}
+commanderConfigEnsureFiles($newDefaultFiles);
 
 // ============================================
 // V3 - TRANSACOES E GATEWAYS
 // ============================================
 
-// Arquivos de dados de transacoes
-define('FILE_TRANSACTIONS', DATA_DIR . 'transactions.json');
-define('FILE_GATEWAYS', DATA_DIR . 'gateways.json');
+define(
+    'FILE_TRANSACTIONS',
+    DATA_DIR . 'transactions.json'
+);
 
-// Criar arquivos padrao do V3
+define(
+    'FILE_GATEWAYS',
+    DATA_DIR . 'gateways.json'
+);
+
 $v3DefaultFiles = [
     FILE_TRANSACTIONS => '[]',
     FILE_GATEWAYS => '{}'
 ];
 
-foreach ($v3DefaultFiles as $file => $defaultContent) {
-    if (!file_exists($file)) {
-        file_put_contents($file, $defaultContent);
-    }
-}
+commanderConfigEnsureFiles($v3DefaultFiles);
 
-// Pasta de logs de webhook
-if (!is_dir(DATA_DIR . 'webhook_logs/')) {
-    mkdir(DATA_DIR . 'webhook_logs/', 0755, true);
-}
+// ============================================
+// DIRETORIOS ADICIONAIS
+// ============================================
 
-// Pasta de transacoes por dia
-if (!is_dir(DATA_DIR . 'transactions/')) {
-    mkdir(DATA_DIR . 'transactions/', 0755, true);
-}
+commanderConfigEnsureDir(
+    DATA_DIR . 'webhook_logs/'
+);
+
+commanderConfigEnsureDir(
+    DATA_DIR . 'transactions/'
+);
+
+// ============================================
+// FIM DO ARQUIVO
+// ============================================

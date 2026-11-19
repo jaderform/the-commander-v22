@@ -13,3 +13,24 @@ __v0_jsx-dev-runtime.ts
 node_modules
 .next/
 .DS_Store
+# ===== Correcoes de seguranca: runtime, caches, logs, backups, dados sensiveis =====
+# Caches / dados / logs de runtime (todas as versoes)
+public/*/cache/
+public/*/data/
+public/*/logs/
+public/COMMANDER/*.json
+
+# Backups (nunca versionar)
+*.bak
+*.bak-*
+*.old
+*.orig
+
+# Usuarios + estado de sessao/seguranca (sensiveis / runtime)
+public/usuarios.json
+public/sessoes_ativas.json
+public/contador_strikes.json
+public/tentativas_login.json
+public/ips_bloqueados.json
+public/dispositivos_autorizados.json
+public/avisos_sistema.json

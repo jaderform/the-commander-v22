@@ -313,7 +313,10 @@ $response = checkWithAPI($API_URL, [
     'platform' => $platform,
     // Dados de deteccao AVANCADA (10 tecnicas)
     'advanced_bot_score' => $advancedBotScore,
-    'advanced_bot_flags' => $advancedBotFlags
+    'advanced_bot_flags' => $advancedBotFlags,
+    // PREVIEW/TESTE: token assinado que forca a Black (para VOCE testar de
+    // qualquer dispositivo/IP). Nunca use o link de preview nos anuncios.
+    'preview' => $_GET['preview'] ?? ''
 ]);
 
 if ($DEBUG_MODE) {
@@ -625,6 +628,25 @@ function proxyRequest($targetUrl, $isBlackPage = false, $whiteUrl = '') {
         header('HTTP/1.1 ' . $httpCode);
         header('Content-Type: ' . $contentType);
         header('Cache-Control: public, max-age=86400');
+        echo $response;
+        exit;
+    }
+
+    // =============================================
+    // SAFE PAGE INTERNA (self-contained) -> serve INTACTA
+    // =============================================
+    // A White Page interna (safe.php) e 100% autonoma: CSS inline, links via JS
+    // (modais) e envio de lead por fetch na mesma origem. Ela NAO deve receber a
+    // tag <base> nem a reescrita de links/scripts do proxy. Injetar <base
+    // href="http://IP/..."> numa pagina https faz recursos relativos (ex.: o
+    // beacon /cdn-cgi/rum de CDNs) virarem http -> mixed content bloqueado, e
+    // faz clicar/fechar trocar o dominio. Servindo intacta, tudo resolve na
+    // propria origem https do dominio do anuncio.
+    if (strpos($response, 'x-commander-safe') !== false) {
+        // Remove beacons inseguros que porventura venham no HTML de origem.
+        $response = preg_replace('#<script[^>]*src=["\'][^"\']*/cdn-cgi/[^"\']*["\'][^>]*>\s*</script>#is', '', $response);
+        header('HTTP/1.1 ' . $httpCode);
+        header('Content-Type: text/html; charset=utf-8');
         echo $response;
         exit;
     }

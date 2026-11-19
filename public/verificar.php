@@ -1,266 +1,122 @@
 <?php
-// Inicia a sessão
+/**
+ * Login alternativo (compatibilidade). Agora usa usuarios.json com senha
+ * em hash (password_verify) — sem lista fixa nem senhas em texto puro.
+ * Mantem: bloqueio manual, strikes, validade (expira_em) e sessao unica.
+ */
+
+// ---- Hardening de sessao (cookie) ----
+$__https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
+    || (($_SERVER['SERVER_PORT'] ?? '') == 443)
+    || (strtolower($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https');
+@ini_set('session.use_strict_mode', '1');
+session_set_cookie_params([
+    'lifetime' => 0,
+    'path' => '/',
+    'httponly' => true,
+    'samesite' => 'Lax',
+    'secure' => $__https,
+]);
 session_start();
 
-// Nossos arquivos de controle
-$arquivo_sessoes = 'sessoes_ativas.json';
-$arquivo_strikes = 'contador_strikes.json';
-$limite_strikes = 3; // O usuário será bloqueado no 3º strike
+$arquivo_usuarios = __DIR__ . '/usuarios.json';
+$arquivo_sessoes  = __DIR__ . '/sessoes_ativas.json';
+$arquivo_strikes  = __DIR__ . '/contador_strikes.json';
+$limite_strikes   = 3;
 
-// --- LISTA DE USUÁRIOS AUTORIZADOS ---
-// Todos estão "liberados" por padrão, com "bloqueado" => false
-$usuarios_autorizados = [
-    "adminjd@gmail.com" => [
-        "senha" => "Jader0596##@", 
-        "expira_em" => "2099-12-31", // Admin
-        "bloqueado" => false // Seu controle manual
-    ],
-    "samuel.tardim0@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-02",
-        "bloqueado" => true
-    ],
-    "membrosvip2025@gmail.com" => [
-        "senha" => "Membrosvip20253", 
-        "expira_em" => "2025-12-02",
-        "bloqueado" => false
-    ],
-    "danypassos197@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-02",
-        "bloqueado" => true
-    ],
-    "lamacalf7@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-02",
-        "bloqueado" => true
-    ],
-    "estoudeolho321@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-02",
-        "bloqueado" => true
-    ],
-    "luizahelena@tutamail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-11-29",
-        "bloqueado" => false
-    ],
-    "adrianlazaroba.03@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-11-29",
-        "bloqueado" => false
-    ],
-    "contingenciacx4@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-11-30",
-        "bloqueado" => false
-    ],
-    "acesso4892@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-11-30",
-        "bloqueado" => true
-    ],
-    "acesso4893@gmail.com" => [
-        "senha" => "Alterar0596###", 
-        "expira_em" => "2025-12-10",
-        "bloqueado" => false
-    ],
-    "Cowstoremp@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-11-10",
-        "bloqueado" => true
-    ],
-    "andretelees@hotmail.com" => [
-        "senha" => "Andre0596#", 
-        "expira_em" => "2025-12-12",
-        "bloqueado" => false
-    ],
-    "acesso4882@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-02",
-        "bloqueado" => false
-    ],
-    "acesso4899@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-02",
-        "bloqueado" => false
-    ],
-    "sotestefofo1@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-02",
-        "bloqueado" => false
-    ],
-    "cristiancavalcante200@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-02",
-        "bloqueado" => false
-    ],
-     "acesso4859@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-02",
-        "bloqueado" => false
-    ],
-    "carteldacontigencia@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-13",
-        "bloqueado" => false
-    ],
-        "lcfreitas1225@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-14",
-        "bloqueado" => false
-    ],
-    "descontinhosbrasileiro@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-14",
-        "bloqueado" => false
-    ],
-    "acesso8348@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-02",
-        "bloqueado" => false
-    ],
-    "igorfrmota1@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-21",
-        "bloqueado" => false
-    ],
-    "samuca@gmail.com" => [
-        "senha" => "Samucaca0596#", 
-        "expira_em" => "2025-12-21",
-        "bloqueado" => true
-    ],
-    "newmickey2025@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-21",
-        "bloqueado" => false
-    ],
-    "jefeg111@gmail.com" => [
-        "senha" => "Alterar0596#", 
-        "expira_em" => "2025-12-21",
-        "bloqueado" => false
-    ],
-    "projectsixinseven@proton.me" => [
-        "senha" => "Project0596#", 
-        "expira_em" => "2025-12-26",
-        "bloqueado" => false
-    ],
-    "yltwo@hotmail.com" => [
-        "senha" => "Yltwo0596#", 
-        "expira_em" => "2025-12-26",
-        "bloqueado" => false
-    ],
-    "agenciahermes1@gmail.com" => [
-        "senha" => "Hermes0596#", 
-        "expira_em" => "2025-12-27",
-        "bloqueado" => false
-    ],
-    "juliocezarfelixdesousa@gmail.com" => [
-        "senha" => "Senha0596#", 
-        "expira_em" => "2025-12-27",
-        "bloqueado" => false
-    ],
-     "allamcorrea10@gmail.com" => [
-        "senha" => "Senha0596#", 
-        "expira_em" => "2025-12-27",
-        "bloqueado" => false
-    ],
-    "mastercontingencia@gmail.com" => [
-        "senha" => "Senha0596#", 
-        "expira_em" => "2025-12-27",
-        "bloqueado" => false
-    ],
-    "cliente24@gmail.com" => [
-        "senha" => "Cliente2423", 
-        "expira_em" => "2025-12-02",
-        "bloqueado" => true //bloqueado
-    ]
-];
-// -----------------------------------------
+$email_digitado = trim($_POST['email'] ?? '');
+$senha_digitada = $_POST['senha'] ?? '';
 
-// Pega os dados do formulário
-$email_digitado = $_POST['email'];
-$senha_digitada = $_POST['senha'];
-
-// Carrega os arquivos de controle
-$sessoes = json_decode(file_get_contents($arquivo_sessoes), true);
-if (!$sessoes) $sessoes = [];
-
-$strikes = json_decode(file_get_contents($arquivo_strikes), true);
-if (!$strikes) $strikes = [];
-
-// Pega o contador de strikes do usuário (ou 0 se não existir)
-$contagem_atual = isset($strikes[$email_digitado]) ? $strikes[$email_digitado] : 0;
-
-
-// --- LÓGICA DE LOGIN ---
-
-// 1. Verifica se o e-mail existe na lista
-if (isset($usuarios_autorizados[$email_digitado])) {
-    
-    $usuario = $usuarios_autorizados[$email_digitado];
-
-    // --- NOVA LÓGICA DE BLOQUEIO (MANUAL + AUTOMÁTICO) ---
-    
-    // 2. VERIFICA O BLOQUEIO MANUAL (O "CADEADO")
-    if (isset($usuario['bloqueado']) && $usuario['bloqueado'] === true) {
-        header('Location: login.php?erro=4'); // Erro 4 = Bloqueado
-        exit();
-    }
-    
-    // 3. VERIFICA O BLOQUEIO AUTOMÁTICO (O "VIGIA")
-    if ($contagem_atual >= $limite_strikes) {
-        header('Location: login.php?erro=4'); // Erro 4 = Bloqueado
-        exit();
-    }
-    // --- FIM DA LÓGICA DE BLOQUEIO ---
-
-
-    // 4. Se não está bloqueado, verifica se a SENHA BATE
-    if ($senha_digitada == $usuario['senha']) {
-        
-        // 5. Se a senha bate, verifica se o ACESSO NÃO EXPIROU
-        $hoje = date('Y-m-d');
-        $data_expiracao = $usuario['expira_em'];
-        
-        if ($hoje <= $data_expiracao) {
-            
-            // --- LÓGICA DE STRIKE ---
-            // Verifica se este login vai "chutar" outra sessão
-            if (isset($sessoes[$email_digitado])) {
-                // SIM, é um strike!
-                $contagem_atual++; // Adiciona +1
-                $strikes[$email_digitado] = $contagem_atual; // Salva a nova contagem
-                file_put_contents($arquivo_strikes, json_encode($strikes)); // Salva no arquivo
-            }
-            
-            // --- CÓDIGO PARA SESSÃO ÚNICA (Como antes) ---
-            $token_de_acesso = bin2hex(random_bytes(16));
-            
-            $_SESSION['logado'] = true;
-            $_SESSION['email'] = $email_digitado;
-            $_SESSION['token_de_acesso'] = $token_de_acesso; 
-
-            $sessoes[$email_digitado] = $token_de_acesso;
-            file_put_contents($arquivo_sessoes, json_encode($sessoes));
-            
-            // Redireciona para a página principal (o painel)
-            header('Location: index.php');
-            exit();
-            
-        } else {
-            // Acesso expirado
-            header('Location: login.php?erro=2');
-            exit();
-        }
-    } else {
-        // Senha errada
-        header('Location: login.php?erro=1');
-        exit();
-    }
-} else {
-    // E-mail não existe
+if ($email_digitado === '' || $senha_digitada === '') {
     header('Location: login.php?erro=1');
     exit();
 }
-?>
+
+$usuarios = json_decode(@file_get_contents($arquivo_usuarios), true);
+if (!is_array($usuarios)) $usuarios = [];
+
+$sessoes = json_decode(@file_get_contents($arquivo_sessoes), true);
+if (!is_array($sessoes)) $sessoes = [];
+
+$strikes = json_decode(@file_get_contents($arquivo_strikes), true);
+if (!is_array($strikes)) $strikes = [];
+
+// Busca usuario (email como chave, case-insensitive)
+$usuario = null; $emailKeyEncontrado = null;
+foreach ($usuarios as $k => $d) {
+    if (strtolower($k) === strtolower($email_digitado)) { $usuario = $d; $emailKeyEncontrado = $k; break; }
+}
+
+if ($usuario === null) {
+    header('Location: login.php?erro=1');
+    exit();
+}
+
+$contagem_atual = isset($strikes[$emailKeyEncontrado]) ? (int)$strikes[$emailKeyEncontrado] : 0;
+
+// Bloqueio manual
+if (!empty($usuario['bloqueado']) && $usuario['bloqueado'] === true) {
+    header('Location: login.php?erro=4');
+    exit();
+}
+// Bloqueio automatico por strikes
+if ($contagem_atual >= $limite_strikes) {
+    header('Location: login.php?erro=4');
+    exit();
+}
+
+// Verifica senha (hash + fallback legado texto puro)
+$stored = (string)($usuario['senha'] ?? '');
+$senhaOk = false; $precisaRehash = false;
+if ($stored !== '' && (strncmp($stored, '$2', 2) === 0 || strncmp($stored, '$argon', 6) === 0)) {
+    $senhaOk = password_verify($senha_digitada, $stored);
+} elseif ($stored !== '') {
+    $senhaOk = hash_equals($stored, (string)$senha_digitada);
+    $precisaRehash = $senhaOk;
+}
+
+if (!$senhaOk) {
+    header('Location: login.php?erro=1');
+    exit();
+}
+
+// Validade
+$hoje = date('Y-m-d');
+$data_expiracao = $usuario['expira_em'] ?? '2099-12-31';
+if ($hoje > $data_expiracao) {
+    header('Location: login.php?erro=2');
+    exit();
+}
+
+// Re-hash de senha legada
+if ($precisaRehash) {
+    $usuarios[$emailKeyEncontrado]['senha'] = password_hash($senha_digitada, PASSWORD_BCRYPT);
+    file_put_contents($arquivo_usuarios, json_encode($usuarios, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE), LOCK_EX);
+}
+
+// Strike se vai chutar outra sessao
+if (isset($sessoes[$emailKeyEncontrado])) {
+    $contagem_atual++;
+    $strikes[$emailKeyEncontrado] = $contagem_atual;
+    file_put_contents($arquivo_strikes, json_encode($strikes), LOCK_EX);
+}
+
+// Previne session fixation
+session_regenerate_id(true);
+
+$token_de_acesso = bin2hex(random_bytes(16));
+$_SESSION['logado'] = true;
+$_SESSION['email'] = $emailKeyEncontrado;
+$_SESSION['usuario_email'] = $emailKeyEncontrado;
+$_SESSION['usuario_nome'] = $usuario['nome'] ?? $emailKeyEncontrado;
+$_SESSION['eh_admin'] = $usuario['eh_admin'] ?? false;
+$_SESSION['utm_cloaker_ativo'] = $usuario['utm_cloaker_ativo'] ?? false;
+$_SESSION['ip'] = $_SERVER['REMOTE_ADDR'] ?? '';
+$_SESSION['login_time'] = time();
+$_SESSION['token_de_acesso'] = $token_de_acesso;
+
+$sessoes[$emailKeyEncontrado] = $token_de_acesso;
+file_put_contents($arquivo_sessoes, json_encode($sessoes), LOCK_EX);
+
+header('Location: index.php');
+exit();

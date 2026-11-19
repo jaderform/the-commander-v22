@@ -1,19 +1,29 @@
+
 <?php
 /**
- * COMMANDER - Motor de Cloaking por Dominio (estilo White Rabbit)
+ * COMMANDER V10.5
+ * cloak-engine.php
  *
- * Chamado automaticamente pelo index.php quando o trafego chega por um
- * DOMINIO DE CAMPANHA apontado para o COMMANDER (via CNAME ou registro A).
- * Localiza a campanha pelo dominio e executa o cloaking direto no servidor,
- * sem precisar baixar/instalar tracker manualmente.
+ * Motor de carregamento de campanhas por dominio.
  *
- * Fluxo:
- *  1. index.php detecta que o Host e um dominio de campanha e define
- *     $GLOBALS['__CLOAK_CAMPAIGN'].
- *  2. Este motor carrega o "live tracker" gerado para a campanha
- *     (pasta /live/{slug}.php) e o executa.
- *  3. O live tracker consulta a api.php e serve a Safe Page ou a Offer Page.
+ * CORRECOES:
+ * - Validacao rigorosa de identificadores.
+ * - Protecao contra caminhos invalidos.
+ * - Verificacao de arquivos e permissoes.
+ * - Validacao de URLs de redirecionamento.
+ * - Tratamento seguro de dados incorretos.
+ * - Compatibilidade com o roteador existente.
+ *
+ * IMPORTANTE:
+ * Este arquivo e carregado pelo index.php.
+ * A campanha deve estar disponivel em:
+ *
+ * $GLOBALS['__CLOAK_CAMPAIGN']
  */
+
+// ============================================
+// VALIDACAO DA CAMPANHA
+// ============================================
 
 $campaign = $GLOBALS['__CLOAK_CAMPAIGN'] ?? null;
 
@@ -22,23 +32,197 @@ if (!is_array($campaign)) {
     exit;
 }
 
-$slug = preg_replace('/[^a-zA-Z0-9_-]/', '', $campaign['slug'] ?? '');
-$liveFile = __DIR__ . '/live/' . $slug . '.php';
+// ============================================
+// IDENTIFICADOR DA CAMPANHA
+// ============================================
 
-// Caminho principal: executa o tracker gerado para esta campanha.
-if ($slug !== '' && is_file($liveFile)) {
+$rawSlug = $campaign['slug'] ?? '';
+
+$slug = '';
+
+if (is_string($rawSlug)) {
+    $rawSlug = trim($rawSlug);
+
+    if (
+        $rawSlug !== '' &&
+        preg_match(
+            '/\A[a-zA-Z0-9_-]+\z/',
+            $rawSlug
+        ) === 1
+    ) {
+        $slug = $rawSlug;
+    }
+}
+
+// ============================================
+// DIRETORIO DE ARQUIVOS
+// ============================================
+
+$liveDirectory = __DIR__ . '/live';
+
+$liveFile = null;
+
+// Somente identifica arquivos quando o
+// slug informado e valido.
+if ($slug !== '') {
+
+    $realDirectory = realpath($liveDirectory);
+
+    if (
+        $realDirectory !== false &&
+        is_dir($realDirectory)
+    ) {
+
+        $candidate = $realDirectory
+            . DIRECTORY_SEPARATOR
+            . $slug
+            . '.php';
+
+        $resolvedFile = realpath($candidate);
+
+        // Impede inclusao de caminhos localizados
+        // fora da pasta live.
+        if ($resolvedFile !== false) {
+
+            $requiredPrefix = $realDirectory
+                . DIRECTORY_SEPARATOR;
+
+            $insideDirectory = (
+                strpos(
+                    $resolvedFile,
+                    $requiredPrefix
+                ) === 0
+            );
+
+            if (
+                $insideDirectory &&
+                is_file($resolvedFile) &&
+                is_readable($resolvedFile)
+            ) {
+                $liveFile = $resolvedFile;
+            }
+        }
+    }
+}
+
+// ============================================
+// CARREGAMENTO DO MODULO
+// ============================================
+
+if ($liveFile !== null) {
+
     require $liveFile;
+
     exit;
 }
 
-// Fallback seguro: se o tracker ainda nao foi gerado, envia para a Safe Page.
-// (Para gerar, basta salvar a campanha novamente no painel.)
-$white = trim($campaign['white_url'] ?? '');
-if (filter_var($white, FILTER_VALIDATE_URL)) {
-    header('Location: ' . $white, true, 302);
+// ============================================
+// FALLBACK DA CAMPANHA
+// ============================================
+
+// Mantem o comportamento original:
+// se o modulo nao existir, utiliza a
+// pagina alternativa configurada.
+
+$rawWhiteUrl = $campaign['white_url'] ?? '';
+
+$whiteUrl = '';
+
+if (is_string($rawWhiteUrl)) {
+    $whiteUrl = trim($rawWhiteUrl);
+}
+
+// ============================================
+// VALIDACAO DO REDIRECIONAMENTO
+// ============================================
+
+$validRedirect = false;
+
+if ($whiteUrl !== '') {
+
+    $parsedUrl = parse_url($whiteUrl);
+
+    if (is_array($parsedUrl)) {
+
+        $scheme = strtolower(
+            (string) ($parsedUrl['scheme'] ?? '')
+        );
+
+        $host = $parsedUrl['host'] ?? '';
+
+        $validScheme = in_array(
+            $scheme,
+            ['http', 'https'],
+            true
+        );
+
+        $validHost = (
+            is_string($host) &&
+            $host !== ''
+        );
+
+        $validUrl = (
+            filter_var(
+                $whiteUrl,
+                FILTER_VALIDATE_URL
+            ) !== false
+        );
+
+        // Impede caracteres de controle
+        // em cabecalhos HTTP.
+        $validHeader = (
+            preg_match(
+                '/[\x00-\x1F\x7F]/',
+                $whiteUrl
+            ) !== 1
+        );
+
+        $validRedirect = (
+            $validScheme &&
+            $validHost &&
+            $validUrl &&
+            $validHeader
+        );
+    }
+}
+
+// ============================================
+// EXECUCAO DO FALLBACK
+// ============================================
+
+if ($validRedirect) {
+
+    header(
+        'Location: ' . $whiteUrl,
+        true,
+        302
+    );
+
     exit;
 }
+
+// ============================================
+// CAMPANHA NAO CONFIGURADA
+// ============================================
 
 http_response_code(404);
+
+header(
+    'Content-Type: text/plain; charset=utf-8'
+);
+
+header(
+    'X-Content-Type-Options: nosniff'
+);
+
+header(
+    'Cache-Control: no-store'
+);
+
 echo 'Campanha nao configurada.';
+
 exit;
+
+// ============================================
+// FIM DO ARQUIVO
+// ============================================

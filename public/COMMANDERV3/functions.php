@@ -13,6 +13,31 @@ if (!defined('COMMANDER_ACCESS')) {
 
 /**
  * ============================================
+ * PREVIEW / TESTE (token assinado)
+ * ============================================
+ * Gera um token secreto assinado (HMAC) por campanha. Quando esse token e
+ * passado na URL (?preview=TOKEN), o visitante vai DIRETO para a Black,
+ * ignorando toda a deteccao - util para VOCE testar a oferta de qualquer
+ * dispositivo/IP, sem precisar cadastrar IP na whitelist.
+ *
+ * O token deriva do slug + segredo do servidor (API_TOKEN), entao um bot NAO
+ * consegue adivinhar. NAO expira (igual ?approved=1 dos concorrentes, porem
+ * seguro). Nunca use o link de preview nos anuncios.
+ */
+function commanderPreviewToken($slug) {
+    $secret = defined('API_TOKEN') ? API_TOKEN : 'commander_default_secret';
+    return substr(hash_hmac('sha256', 'preview|' . $slug, $secret), 0, 32);
+}
+
+/** Valida em tempo constante o token de preview de uma campanha. */
+function commanderVerifyPreviewToken($slug, $token) {
+    if (empty($token) || empty($slug)) return false;
+    $expected = commanderPreviewToken($slug);
+    return hash_equals($expected, (string)$token);
+}
+
+/**
+ * ============================================
  * FUNÇÕES DE ARQUIVOS E DADOS
  * ============================================
  */
@@ -901,10 +926,83 @@ function logBot($data) {
 
 /**
  * Retorna logs de bots
+ *
+ * Normaliza o schema legado (user_agent/campaign) e remove duplicatas
+ * geradas quando o mesmo acesso era gravado duas vezes (logBot + logBotAccess).
  */
 function getBotLogs($limit = 100, $offset = 0) {
     $logs = readJsonFile(FILE_BOT_LOGS, []);
-    return array_slice($logs, $offset, $limit);
+    if (!is_array($logs) || !$logs) {
+        return [];
+    }
+
+    // 1) Normaliza campos antigos para o formato que o painel espera
+    foreach ($logs as &$log) {
+        if (!is_array($log)) {
+            continue;
+        }
+        if (!isset($log['ua']) && isset($log['user_agent'])) {
+            $log['ua'] = $log['user_agent'];
+        }
+        if (!isset($log['campaign']) && !empty($log['campaign_id'])) {
+            // campaign_id ja basta para campaignLabel(); noop
+        }
+        if (!isset($log['reason']) || $log['reason'] === '') {
+            $log['reason'] = 'Sem motivo registrado';
+        }
+    }
+    unset($log);
+
+    // 2) Deduplica pares consecutivos do mesmo IP+campanha em ate 2s,
+    //    preferindo a entrada que tem "details" (schema novo).
+    $deduped = [];
+    foreach ($logs as $log) {
+        if (!is_array($log)) {
+            continue;
+        }
+        if ($deduped) {
+            $prev = &$deduped[count($deduped) - 1];
+            $sameIp = (($prev['ip'] ?? '') !== '' && ($prev['ip'] ?? '') === ($log['ip'] ?? ''));
+            $sameCamp = (($prev['campaign_id'] ?? '') === ($log['campaign_id'] ?? ''));
+            $t1 = strtotime($prev['timestamp'] ?? '');
+            $t2 = strtotime($log['timestamp'] ?? '');
+            $close = ($t1 && $t2 && abs($t1 - $t2) <= 2);
+
+            if ($sameIp && $sameCamp && $close) {
+                $prevHas = !empty($prev['details']) && is_array($prev['details']);
+                $logHas  = !empty($log['details']) && is_array($log['details']);
+
+                if (!$prevHas && $logHas) {
+                    // Troca pelo schema novo, preservando slug/campaign se existir
+                    if (!empty($prev['campaign']) && empty($log['campaign'])) {
+                        $log['campaign'] = $prev['campaign'];
+                    }
+                    if (empty($log['ua']) && !empty($prev['ua'])) {
+                        $log['ua'] = $prev['ua'];
+                    }
+                    // Prefere o reason mais descritivo (geralmente o do logBotAccess)
+                    if (!empty($prev['reason']) && strlen((string)$prev['reason']) > strlen((string)($log['reason'] ?? ''))) {
+                        // keep log reason if logHas details; details reason usually better
+                    }
+                    $prev = $log;
+                } elseif ($prevHas && !$logHas) {
+                    if (!empty($log['campaign']) && empty($prev['campaign'])) {
+                        $prev['campaign'] = $log['campaign'];
+                    }
+                    if (empty($prev['ua']) && !empty($log['ua'])) {
+                        $prev['ua'] = $log['ua'];
+                    }
+                }
+                // se ambos tem ou ambos nao tem details: mantem o primeiro (mais recente)
+                unset($prev);
+                continue;
+            }
+            unset($prev);
+        }
+        $deduped[] = $log;
+    }
+
+    return array_slice($deduped, $offset, $limit);
 }
 
 /**
@@ -3839,7 +3937,11 @@ function saveAccessLog($logData) {
         'device' => $logData['device'] ?? '',
         'bot_score' => (int)($logData['bot_score'] ?? 0),
         'bot_flags' => $logData['bot_flags'] ?? '',
-        'url' => substr($logData['url'] ?? '', 0, 500)
+        'url' => substr($logData['url'] ?? '', 0, 500),
+        // Sinais ricos para analise humano x bot (opcionais)
+        'visitor_key' => $logData['visitor_key'] ?? '',
+        'signals' => is_array($logData['signals'] ?? null) ? $logData['signals'] : null,
+        'behavior' => is_array($logData['behavior'] ?? null) ? $logData['behavior'] : null
     ];
     
     // Append ao arquivo do dia
@@ -3857,6 +3959,61 @@ function saveAccessLog($logData) {
     }
     
     file_put_contents($filename, json_encode($existingLogs, JSON_PRETTY_PRINT), LOCK_EX);
+    return true;
+}
+
+/**
+ * Registra o COMPORTAMENTO pos-carregamento de um acesso (o que ele fez:
+ * entrou, rolou, tocou, saiu sem interagir, etc.) e mescla no log de acesso
+ * correspondente (pela visitor_key) do dia. Se nao achar, guarda uma entrada
+ * propria para nao perder o dado. Base para diferenciar humano de bot.
+ */
+function recordBehaviorLog($visitorKey, $campaignSlug, $behavior) {
+    $date = date('Y-m-d');
+    $filename = ACCESS_LOGS_DIR . $date . '.json';
+
+    $behavior = [
+        'outcome'        => substr((string)($behavior['outcome'] ?? ''), 0, 40),   // interacted | no_interaction | left
+        'signal'         => substr((string)($behavior['signal'] ?? ''), 0, 20),    // touch | scroll | gyro | click
+        'time_to_act'    => (int)($behavior['time_to_act'] ?? 0),                   // ms ate 1a interacao
+        'time_on_page'   => (int)($behavior['time_on_page'] ?? 0),                  // ms total ate o beacon
+        'scrolled'       => !empty($behavior['scrolled']) ? 1 : 0,
+        'touched'        => !empty($behavior['touched']) ? 1 : 0,
+        'gyro'           => !empty($behavior['gyro']) ? 1 : 0,
+        'max_scroll'     => (int)($behavior['max_scroll'] ?? 0),                    // % rolado
+        'visibility_lost'=> !empty($behavior['visibility_lost']) ? 1 : 0
+    ];
+
+    if (!file_exists($filename)) {
+        return false;
+    }
+    $logs = json_decode(file_get_contents($filename), true) ?: [];
+    if (empty($logs)) return false;
+
+    // Procura a entrada mais recente com a mesma visitor_key (percorre do fim)
+    $merged = false;
+    for ($i = count($logs) - 1; $i >= 0; $i--) {
+        if (($logs[$i]['visitor_key'] ?? '') !== '' && ($logs[$i]['visitor_key'] ?? '') === $visitorKey) {
+            $logs[$i]['behavior'] = $behavior;
+            $merged = true;
+            break;
+        }
+    }
+
+    // Nao achou (ex.: gate sem log previo): cria entrada leve so com comportamento
+    if (!$merged) {
+        $logs[] = [
+            'timestamp'     => date('Y-m-d H:i:s'),
+            'campaign_slug' => $campaignSlug,
+            'ip_masked'     => '',
+            'result'        => 'behavior_only',
+            'reason'        => 'Comportamento (sem log de decisao correlacionado)',
+            'visitor_key'   => $visitorKey,
+            'behavior'      => $behavior
+        ];
+    }
+
+    file_put_contents($filename, json_encode($logs, JSON_PRETTY_PRINT), LOCK_EX);
     return true;
 }
 
@@ -5344,4 +5501,392 @@ function removeMarkedScanner($ip) {
     if (!is_array($data) || !isset($data[$ip])) return false;
     unset($data[$ip]);
     return writeJsonFile(FILE_WAF_SCANNERS, $data);
+}
+
+// ============================================
+// FREQUENCY CAP - limite de visualizacoes da BLACK por visitante
+// ============================================
+// Regra: acessos reais saturam em ate FREQ_CAP_MAX visualizacoes da oferta
+// (cada acesso real = 1 view, mesmo que gere 2 linhas de log). Bots insistem
+// alem disso. Ao passar de FREQ_CAP_MAX, o IP e marcado como "blocked" de
+// forma PERMANENTE e, em toda visita futura, vai direto para a White Page.
+//
+// Estrutura de cada entrada em FILE_FREQ_CAP:
+//   $data[$key] = [
+//     'views'      => [timestamp, timestamp, ...], // visualizacoes na janela
+//     'blocked'    => true|false,                  // bloqueio permanente
+//     'blocked_at' => 'Y-m-d H:i:s' | null,
+//   ]
+
+// Intervalo (segundos) para tratar acessos coladinhos como o MESMO acesso
+// real. Protege a contagem caso o tracker chame a API mais de uma vez por
+// visita (o que aparece como 2 linhas de log para 1 acesso).
+if (!defined('FREQ_CAP_DEDUP_SECONDS')) {
+    define('FREQ_CAP_DEDUP_SECONDS', 5);
+}
+
+/**
+ * Gera a chave de contagem do visitante.
+ * No IPv6 o sufixo do endereco muda a cada conexao (privacy extensions),
+ * entao contar pelo IP inteiro nao segura o mesmo aparelho. Por isso
+ * usamos apenas o prefixo de rede /64 (primeiros 4 grupos) no IPv6 -
+ * mesmo criterio ja usado na whitelist. IPv4 usa o endereco completo.
+ */
+function freqVisitorKey($ip) {
+    $ip = trim((string)$ip);
+    if ($ip === '') {
+        return 'unknown';
+    }
+    // IPv6: usa o prefixo /64 (primeiros 4 grupos)
+    if (strpos($ip, ':') !== false) {
+        $parts = explode(':', $ip);
+        return 'v6:' . strtolower(implode(':', array_slice($parts, 0, 4)));
+    }
+    // IPv4: endereco completo
+    return 'v4:' . $ip;
+}
+
+/**
+ * Normaliza uma entrada do arquivo para a estrutura atual (views/blocked),
+ * aceitando tambem o formato antigo (lista simples de timestamps).
+ */
+function freqNormalizeEntry($entry) {
+    if (!is_array($entry)) {
+        return ['views' => [], 'blocked' => false, 'blocked_at' => null];
+    }
+    // Formato atual
+    if (array_key_exists('views', $entry) || array_key_exists('blocked', $entry)) {
+        $views = (isset($entry['views']) && is_array($entry['views']))
+            ? array_map('intval', array_values($entry['views'])) : [];
+        return [
+            'views'      => $views,
+            'blocked'    => !empty($entry['blocked']),
+            'blocked_at' => $entry['blocked_at'] ?? null,
+        ];
+    }
+    // Formato antigo: lista simples de timestamps
+    return [
+        'views'      => array_map('intval', array_values($entry)),
+        'blocked'    => false,
+        'blocked_at' => null,
+    ];
+}
+
+/**
+ * Verifica se o visitante ja esta bloqueado PERMANENTEMENTE (force white).
+ * Nao depende de janela de tempo - uma vez bloqueado, sempre bloqueado.
+ */
+function freqIsBlocked($ip) {
+    $key = freqVisitorKey($ip);
+    $data = readJsonFile(FILE_FREQ_CAP, []);
+    if (!is_array($data) || !isset($data[$key])) {
+        return false;
+    }
+    $entry = freqNormalizeEntry($data[$key]);
+    return $entry['blocked'];
+}
+
+/**
+ * Conta quantas visualizacoes da BLACK o visitante teve dentro da janela.
+ */
+function freqCountBlackViews($ip, $window = null) {
+    if ($window === null) {
+        $window = defined('FREQ_CAP_WINDOW') ? FREQ_CAP_WINDOW : 86400;
+    }
+    $key = freqVisitorKey($ip);
+    $data = readJsonFile(FILE_FREQ_CAP, []);
+    if (!is_array($data) || !isset($data[$key])) {
+        return 0;
+    }
+    $entry = freqNormalizeEntry($data[$key]);
+    $now = time();
+    $count = 0;
+    foreach ($entry['views'] as $ts) {
+        if (($now - (int)$ts) <= $window) {
+            $count++;
+        }
+    }
+    return $count;
+}
+
+/**
+ * Marca o visitante como bloqueado PERMANENTEMENTE (force white para sempre).
+ */
+function freqBlockForever($ip) {
+    $key = freqVisitorKey($ip);
+    $data = readJsonFile(FILE_FREQ_CAP, []);
+    if (!is_array($data)) {
+        $data = [];
+    }
+    $entry = isset($data[$key]) ? freqNormalizeEntry($data[$key])
+                                : ['views' => [], 'blocked' => false, 'blocked_at' => null];
+    $entry['blocked'] = true;
+    if (empty($entry['blocked_at'])) {
+        $entry['blocked_at'] = date('Y-m-d H:i:s');
+    }
+    $data[$key] = $entry;
+    return writeJsonFile(FILE_FREQ_CAP, $data);
+}
+
+/**
+ * Registra uma visualizacao da BLACK para o visitante.
+ * - Ignora acessos dentro de FREQ_CAP_DEDUP_SECONDS (mesmo acesso real).
+ * - Higieniza timestamps vencidos, mas PRESERVA entradas bloqueadas
+ *   (o bloqueio e permanente, nao expira com a janela).
+ */
+function freqRecordBlackView($ip, $window = null) {
+    if ($window === null) {
+        $window = defined('FREQ_CAP_WINDOW') ? FREQ_CAP_WINDOW : 86400;
+    }
+    $dedup = defined('FREQ_CAP_DEDUP_SECONDS') ? FREQ_CAP_DEDUP_SECONDS : 5;
+    $key = freqVisitorKey($ip);
+    $data = readJsonFile(FILE_FREQ_CAP, []);
+    if (!is_array($data)) {
+        $data = [];
+    }
+    $now = time();
+
+    $entry = isset($data[$key]) ? freqNormalizeEntry($data[$key])
+                                : ['views' => [], 'blocked' => false, 'blocked_at' => null];
+
+    // Anti-duplicacao: se a ultima view foi ha poucos segundos, e o mesmo
+    // acesso real (as 2 linhas de log de uma mesma visita). Nao conta de novo.
+    $lastView = !empty($entry['views']) ? (int)max($entry['views']) : 0;
+    if ($lastView && ($now - $lastView) < $dedup) {
+        // ainda assim persiste (mantem estrutura higienizada), mas sem nova view
+    } else {
+        $entry['views'][] = $now;
+    }
+    $data[$key] = $entry;
+
+    // Higieniza todas as chaves
+    foreach ($data as $k => $raw) {
+        $e = freqNormalizeEntry($raw);
+        $kept = [];
+        foreach ($e['views'] as $ts) {
+            if (($now - (int)$ts) <= $window) {
+                $kept[] = (int)$ts;
+            }
+        }
+        $e['views'] = array_values($kept);
+        // Remove a chave apenas se NAO estiver bloqueada e sem views na janela
+        if (empty($e['views']) && empty($e['blocked'])) {
+            unset($data[$k]);
+        } else {
+            $data[$k] = $e;
+        }
+    }
+
+    return writeJsonFile(FILE_FREQ_CAP, $data);
+}
+
+/**
+ * Lista todos os IPs bloqueados permanentemente (para exibicao no painel).
+ */
+function getForceWhiteList() {
+    $data = readJsonFile(FILE_FREQ_CAP, []);
+    if (!is_array($data)) return [];
+    $result = [];
+    foreach ($data as $key => $raw) {
+        $e = freqNormalizeEntry($raw);
+        if (!empty($e['blocked'])) {
+            $result[$key] = $e;
+        }
+    }
+    return $result;
+}
+
+/**
+ * Remove o bloqueio permanente de um visitante (caso de falso-positivo).
+ */
+function removeForceWhite($ip) {
+    $key = freqVisitorKey($ip);
+    $data = readJsonFile(FILE_FREQ_CAP, []);
+    if (!is_array($data) || !isset($data[$key])) return false;
+    unset($data[$key]);
+    return writeJsonFile(FILE_FREQ_CAP, $data);
+}
+
+// ============================================
+// FINGERPRINT VELOCITY - deteccao de farm / bots "humanos"
+// ============================================
+// Ideia: um mesmo fingerprint de device visto em MUITAS redes diferentes em
+// pouco tempo e farm (mesma imagem de emulador reusada). Humano real tem
+// fingerprint diverso e fica em 1 rede. As redes sao contadas por prefixo
+// /64 (IPv6) ou IP cheio (IPv4), o mesmo criterio do frequency cap, para nao
+// punir a rotacao natural de IPv6 de um mesmo aparelho.
+
+/**
+ * Monta um hash de fingerprint de device a partir dos sinais coletados.
+ * Retorna '' quando os sinais sao fracos demais para identificar um device
+ * (evita agrupar todos os "vazios" num falso farm).
+ */
+function buildDeviceFingerprint($data) {
+    $canvas = trim((string)($data['canvas_fp'] ?? ''));
+    $webgl  = trim((string)($data['webgl_fp'] ?? ''));
+    $audio  = trim((string)($data['audio_fp'] ?? ''));
+    $screen = trim((string)($data['screen_width'] ?? '')) . 'x' . trim((string)($data['screen_height'] ?? ''));
+    $tz     = trim((string)($data['timezone'] ?? ''));
+    $plat   = trim((string)($data['platform'] ?? ''));
+
+    // Considera "forte" apenas se houver pelo menos um sinal de hardware real
+    // (canvas/webgl/audio) valido - descarta erros e vazios.
+    $strong = 0;
+    foreach ([$canvas, $webgl, $audio] as $sig) {
+        if ($sig !== '' && stripos($sig, 'err') === false
+            && stripos($sig, 'unsupported') === false && $sig !== '0') {
+            $strong++;
+        }
+    }
+    if ($strong === 0) {
+        return '';
+    }
+
+    return md5(implode('|', [$canvas, $webgl, $audio, $screen, $tz, $plat]));
+}
+
+/**
+ * Registra que este fingerprint foi visto vindo da rede do IP dado, dentro
+ * da janela, e retorna quantas REDES distintas ja usaram esse fingerprint.
+ * Higieniza redes vencidas para manter o arquivo enxuto.
+ */
+function fpTrackAndCountNetworks($fpHash, $ip, $window = null) {
+    if ($fpHash === '') {
+        return 0;
+    }
+    if ($window === null) {
+        $window = defined('FP_VELOCITY_WINDOW') ? FP_VELOCITY_WINDOW : 3600;
+    }
+    $net = freqVisitorKey($ip); // /64 no IPv6, IP cheio no IPv4
+    $now = time();
+
+    $data = readJsonFile(FILE_FP_VELOCITY, []);
+    if (!is_array($data)) {
+        $data = [];
+    }
+
+    $entry = (isset($data[$fpHash]) && is_array($data[$fpHash])) ? $data[$fpHash] : [];
+    // entry: [ netKey => lastSeenTimestamp ]
+    $entry[$net] = $now;
+
+    // Remove redes fora da janela
+    foreach ($entry as $k => $ts) {
+        if (($now - (int)$ts) > $window) {
+            unset($entry[$k]);
+        }
+    }
+    $data[$fpHash] = $entry;
+
+    // Higieniza fingerprints que ficaram sem nenhuma rede na janela
+    foreach ($data as $fp => $nets) {
+        if (!is_array($nets) || empty($nets)) {
+            unset($data[$fp]);
+        }
+    }
+
+    writeJsonFile(FILE_FP_VELOCITY, $data);
+
+    return count($entry);
+}
+
+// ============================================
+// REPUTACAO DE IP (ip-api.com) com CACHE local
+// ============================================
+// Retorna um array com a natureza da conexao do IP:
+//   [ 'hosting' => bool, 'proxy' => bool, 'mobile' => bool,
+//     'as' => 'ASxxxx ...', 'isp' => '...', 'checked' => bool ]
+// 'checked' = false quando nao foi possivel consultar (rede/timeout/limite),
+// para que o chamador NAO bloqueie por falta de dado (fail-open, seguro).
+
+/**
+ * Consulta a reputacao do IP, usando cache local para respeitar o limite
+ * gratuito do ip-api.com (45 req/min) e evitar latencia repetida.
+ */
+function getIpReputation($ip) {
+    $ip = trim((string)$ip);
+    $empty = ['hosting' => false, 'proxy' => false, 'mobile' => false, 'as' => '', 'isp' => '', 'checked' => false];
+    if ($ip === '' || $ip === '0.0.0.0') {
+        return $empty;
+    }
+
+    $ttl = defined('IP_REP_CACHE_TTL') ? IP_REP_CACHE_TTL : 604800;
+    $now = time();
+
+    // 1) Cache
+    $cache = readJsonFile(FILE_IP_REPUTATION, []);
+    if (!is_array($cache)) $cache = [];
+    if (isset($cache[$ip]) && is_array($cache[$ip]) && isset($cache[$ip]['ts'])
+        && ($now - (int)$cache[$ip]['ts']) <= $ttl) {
+        $c = $cache[$ip];
+        return [
+            'hosting' => !empty($c['hosting']),
+            'proxy'   => !empty($c['proxy']),
+            'mobile'  => !empty($c['mobile']),
+            'as'      => (string)($c['as'] ?? ''),
+            'isp'     => (string)($c['isp'] ?? ''),
+            'checked' => true
+        ];
+    }
+
+    // 2) Consulta externa
+    $timeout = defined('IP_REP_TIMEOUT') ? IP_REP_TIMEOUT : 2;
+    $apiKey  = defined('IP_REP_API_KEY') ? IP_REP_API_KEY : '';
+    // Campos: status, proxy, hosting, mobile, as, isp
+    $fields = 'status,message,proxy,hosting,mobile,as,isp,query';
+    if ($apiKey !== '') {
+        // Plano pago (pro): HTTPS + chave
+        $url = 'https://pro.ip-api.com/json/' . urlencode($ip) . '?key=' . urlencode($apiKey) . '&fields=' . $fields;
+    } else {
+        // Plano free: apenas HTTP
+        $url = 'http://ip-api.com/json/' . urlencode($ip) . '?fields=' . $fields;
+    }
+
+    $raw = false;
+    if (function_exists('curl_init')) {
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_CONNECTTIMEOUT => $timeout,
+            CURLOPT_USERAGENT      => 'Mozilla/5.0 (compatible; CommanderWAF/1.0)'
+        ]);
+        $raw = curl_exec($ch);
+        curl_close($ch);
+    } else {
+        $ctx = stream_context_create(['http' => ['timeout' => $timeout]]);
+        $raw = @file_get_contents($url, false, $ctx);
+    }
+
+    if ($raw === false || $raw === '') {
+        // Falha de rede: fail-open (nao bloqueia) e nao cacheia
+        return $empty;
+    }
+
+    $j = json_decode($raw, true);
+    if (!is_array($j) || ($j['status'] ?? '') !== 'success') {
+        // Resposta invalida ou limite atingido: fail-open, nao cacheia
+        return $empty;
+    }
+
+    $result = [
+        'hosting' => !empty($j['hosting']),
+        'proxy'   => !empty($j['proxy']),
+        'mobile'  => !empty($j['mobile']),
+        'as'      => (string)($j['as'] ?? ''),
+        'isp'     => (string)($j['isp'] ?? '')
+    ];
+
+    // 3) Salva no cache
+    $cache[$ip] = $result + ['ts' => $now];
+    // Higieniza cache vencido (mantem o arquivo enxuto)
+    foreach ($cache as $k => $v) {
+        if (!is_array($v) || !isset($v['ts']) || ($now - (int)$v['ts']) > $ttl) {
+            unset($cache[$k]);
+        }
+    }
+    $cache[$ip] = $result + ['ts' => $now];
+    writeJsonFile(FILE_IP_REPUTATION, $cache);
+
+    $result['checked'] = true;
+    return $result;
 }

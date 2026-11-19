@@ -173,7 +173,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $ehAdmin) {
                     // Usa email como chave do JSON
                     $usuarios[$novoEmail] = [
                         'nome' => $novoNome ?: $novoEmail,
-                        'senha' => $novaSenha, // Mantém em texto puro para compatibilidade
+                        'senha' => password_hash($novaSenha, PASSWORD_BCRYPT),
                         'eh_admin' => $novoAdmin,
                         'utm_cloaker_ativo' => $novoCloaker,
                         'expira_em' => $novoExpira,
@@ -204,7 +204,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && $ehAdmin) {
                 foreach ($usuarios as $emailKey => &$dados) {
                     if (strtolower($emailKey) === strtolower($editEmail)) {
                         if ($editNome) $dados['nome'] = $editNome;
-                        if ($editSenha) $dados['senha'] = $editSenha; // Texto puro
+                        if ($editSenha) $dados['senha'] = password_hash($editSenha, PASSWORD_BCRYPT);
                         if ($editExpira) $dados['expira_em'] = $editExpira;
                         $dados['eh_admin'] = $editAdmin;
                         $dados['utm_cloaker_ativo'] = $editCloaker;

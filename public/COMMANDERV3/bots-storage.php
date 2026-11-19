@@ -1,51 +1,68 @@
+
 <?php
 /**
+ * COMMANDER V10.5
  * bots-storage.php
- * ------------------------------------------------------------------
- * Armazenamento de bots em SQLite com RETENCAO INFINITA.
  *
- * Objetivo: guardar bots para sempre (nunca apagar) SEM travar o
- * cloaker, mesmo com milhoes de registros.
+ * Armazenamento SQLite de registros de bots.
  *
- * Como funciona:
- *  - Usa um unico arquivo de banco: data/bots.db
- *  - Busca indexada (instantanea), mesmo com a base enorme
- *  - Escrita segura via transacao (sem corromper em trafego alto)
- *  - WAL mode = varios acessos simultaneos sem travar
+ * Revisao de infraestrutura:
+ * - Transacoes para operacoes multiplas.
+ * - Tratamento de falhas de conexao e consulta.
+ * - Validacao de dados antes da migracao.
+ * - Mascaramento de IPv4 e IPv6.
+ * - Preservacao da estrutura do banco existente.
  *
- * Se o PHP do servidor NAO tiver SQLite, todas as funcoes retornam
- * null e o sistema cai automaticamente no JSON antigo (sem quebrar).
+ * Compatibilidade:
+ * - Mantem os nomes das funcoes publicas.
+ * - Mantem as tabelas e colunas originais.
+ * - Mantem os identificadores MD5 existentes.
+ * - Mantem o retorno null quando SQLite
+ *   nao esta disponivel.
  *
- * Este arquivo deve ficar na RAIZ (junto de functions.php).
- * ------------------------------------------------------------------
+ * Requer PHP 7.4+ com PDO_SQLITE.
  */
+
+// ============================================
+// DIRETORIO DE DADOS
+// ============================================
 
 if (!defined('DATA_DIR')) {
     define('DATA_DIR', __DIR__ . '/data/');
 }
 
-/**
- * SQLite esta disponivel neste servidor?
- */
+// ============================================
+// DISPONIBILIDADE DO SQLITE
+// ============================================
+
 if (!function_exists('botStorageAvailable')) {
-    function botStorageAvailable() {
+
+    function botStorageAvailable()
+    {
         return class_exists('PDO')
-            && in_array('sqlite', PDO::getAvailableDrivers(), true);
+            && in_array(
+                'sqlite',
+                PDO::getAvailableDrivers(),
+                true
+            );
     }
 }
 
-/**
- * Conexao unica (singleton) com o banco de bots.
- * Retorna null se SQLite nao estiver disponivel.
- */
+// ============================================
+// CONEXAO COM BANCO
+// ============================================
+
 if (!function_exists('botDb')) {
-    function botDb() {
+
+    function botDb()
+    {
         static $pdo = null;
         static $tried = false;
 
         if ($tried) {
             return $pdo;
         }
+
         $tried = true;
 
         if (!botStorageAvailable()) {
@@ -54,267 +71,769 @@ if (!function_exists('botDb')) {
 
         try {
             if (!is_dir(DATA_DIR)) {
-                @mkdir(DATA_DIR, 0755, true);
+                if (
+                    !@mkdir(DATA_DIR, 0755, true)
+                    && !is_dir(DATA_DIR)
+                ) {
+                    throw new RuntimeException(
+                        'Nao foi possivel criar DATA_DIR.'
+                    );
+                }
             }
 
-            $pdo = new PDO('sqlite:' . DATA_DIR . 'bots.db');
-            $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+            if (!is_writable(DATA_DIR)) {
+                throw new RuntimeException(
+                    'Diretorio de dados sem permissao de escrita.'
+                );
+            }
 
-            // PRAGMAs para performance + concorrencia segura
-            $pdo->exec('PRAGMA journal_mode = WAL;');     // varios acessos sem travar
-            $pdo->exec('PRAGMA synchronous = NORMAL;');   // rapido e seguro
-            $pdo->exec('PRAGMA busy_timeout = 5000;');    // espera 5s em vez de erro
-            $pdo->exec('PRAGMA temp_store = MEMORY;');
+            $databaseFile = DATA_DIR . 'bots.db';
 
-            // Tabelas (criadas uma unica vez)
-            $pdo->exec('CREATE TABLE IF NOT EXISTS bot_fingerprints (
-                fingerprint TEXT PRIMARY KEY,
-                reason      TEXT,
-                date        TEXT,
-                campaign    TEXT,
-                ip_masked   TEXT
-            );');
+            $pdo = new PDO(
+                'sqlite:' . $databaseFile
+            );
 
-            $pdo->exec('CREATE TABLE IF NOT EXISTS bot_ips (
-                ip_hash     TEXT PRIMARY KEY,
-                count       INTEGER DEFAULT 0,
-                first_seen  TEXT,
-                last_seen   TEXT,
-                last_reason TEXT
-            );');
+            $pdo->setAttribute(
+                PDO::ATTR_ERRMODE,
+                PDO::ERRMODE_EXCEPTION
+            );
 
-            // Indice por data (acelera estatisticas e ordenacao)
-            $pdo->exec('CREATE INDEX IF NOT EXISTS idx_fp_date ON bot_fingerprints(date);');
+            $pdo->setAttribute(
+                PDO::ATTR_DEFAULT_FETCH_MODE,
+                PDO::FETCH_ASSOC
+            );
 
-        } catch (Exception $e) {
-            error_log('[bots-storage] Falha ao abrir SQLite: ' . $e->getMessage());
+            // Aguarda brevemente operacoes concorrentes.
+            $pdo->exec(
+                'PRAGMA busy_timeout = 5000;'
+            );
+
+            // Mantem a configuracao original de WAL.
+            $pdo->exec(
+                'PRAGMA journal_mode = WAL;'
+            );
+
+            $pdo->exec(
+                'PRAGMA synchronous = NORMAL;'
+            );
+
+            $pdo->exec(
+                'PRAGMA temp_store = MEMORY;'
+            );
+
+            // ====================================
+            // TABELA DE FINGERPRINTS
+            // ====================================
+
+            $pdo->exec(
+                'CREATE TABLE IF NOT EXISTS bot_fingerprints (
+                    fingerprint TEXT PRIMARY KEY,
+                    reason      TEXT,
+                    date        TEXT,
+                    campaign    TEXT,
+                    ip_masked   TEXT
+                )'
+            );
+
+            // ====================================
+            // TABELA DE IPS
+            // ====================================
+
+            $pdo->exec(
+                'CREATE TABLE IF NOT EXISTS bot_ips (
+                    ip_hash     TEXT PRIMARY KEY,
+                    count       INTEGER DEFAULT 0,
+                    first_seen  TEXT,
+                    last_seen   TEXT,
+                    last_reason TEXT
+                )'
+            );
+
+            // Mantem indice original.
+            $pdo->exec(
+                'CREATE INDEX IF NOT EXISTS idx_fp_date
+                 ON bot_fingerprints(date)'
+            );
+
+            return $pdo;
+
+        } catch (Throwable $e) {
+
+            error_log(
+                '[bots-storage] Falha na inicializacao: '
+                . $e->getMessage()
+            );
+
             $pdo = null;
-        }
 
-        return $pdo;
-    }
-}
-
-/**
- * Verifica se o visitante ja eh um bot conhecido.
- * Retorna o MESMO formato da funcao original isLearnedBot(),
- * ou null se SQLite indisponivel (para cair no fallback JSON).
- */
-if (!function_exists('botStorageIsLearnedBot')) {
-    function botStorageIsLearnedBot($ip, $userAgent) {
-        $db = botDb();
-        if (!$db) {
             return null;
-        }
-
-        try {
-            $fingerprint = md5($ip . '|' . $userAgent);
-            $ipHash      = md5($ip);
-
-            // 1. Match exato por fingerprint (IP + UA)
-            $stmt = $db->prepare('SELECT reason, date FROM bot_fingerprints WHERE fingerprint = ? LIMIT 1');
-            $stmt->execute([$fingerprint]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($row) {
-                return [
-                    'isBot'      => true,
-                    'reason'     => 'Bot aprendido: ' . ($row['reason'] ?: 'detectado anteriormente'),
-                    'learned_at' => $row['date'] ?? ''
-                ];
-            }
-
-            // 2. IP com 3+ deteccoes
-            $stmt = $db->prepare('SELECT count, last_seen FROM bot_ips WHERE ip_hash = ? LIMIT 1');
-            $stmt->execute([$ipHash]);
-            $row = $stmt->fetch(PDO::FETCH_ASSOC);
-            if ($row && (int) $row['count'] >= 3) {
-                return [
-                    'isBot'      => true,
-                    'reason'     => 'IP bloqueado: multiplas deteccoes (' . $row['count'] . ')',
-                    'learned_at' => $row['last_seen'] ?? ''
-                ];
-            }
-
-            return ['isBot' => false];
-
-        } catch (Exception $e) {
-            error_log('[bots-storage] isLearnedBot: ' . $e->getMessage());
-            return ['isBot' => false];
         }
     }
 }
 
-/**
- * Adiciona/atualiza um bot. Retencao infinita (nunca remove nada).
- * Retorna true/false, ou null se SQLite indisponivel.
- */
-if (!function_exists('botStorageAddLearnedBot')) {
-    function botStorageAddLearnedBot($ip, $userAgent, $reason, $campaignId = '') {
-        $db = botDb();
-        if (!$db) {
-            return null;
+// ============================================
+// ROLLBACK SEGURO
+// ============================================
+
+if (!function_exists('botStorageRollback')) {
+
+    function botStorageRollback($db)
+    {
+        if (!$db instanceof PDO) {
+            return;
         }
 
         try {
-            $fingerprint = md5($ip . '|' . $userAgent);
-            $ipHash      = md5($ip);
-            $date        = date('Y-m-d H:i:s');
-
-            $pos      = strrpos($ip, '.');
-            $ipMasked = ($pos !== false) ? substr($ip, 0, $pos) . '.xxx' : $ip;
-
-            $db->beginTransaction();
-
-            // Fingerprint: insere se ainda nao existe
-            $stmt = $db->prepare('INSERT OR IGNORE INTO bot_fingerprints
-                (fingerprint, reason, date, campaign, ip_masked)
-                VALUES (?, ?, ?, ?, ?)');
-            $stmt->execute([$fingerprint, $reason, $date, $campaignId, $ipMasked]);
-
-            // IP: incrementa contador (UPDATE; se nao existir, INSERT)
-            $upd = $db->prepare('UPDATE bot_ips
-                SET count = count + 1, last_seen = ?, last_reason = ?
-                WHERE ip_hash = ?');
-            $upd->execute([$date, $reason, $ipHash]);
-
-            if ($upd->rowCount() === 0) {
-                $ins = $db->prepare('INSERT OR IGNORE INTO bot_ips
-                    (ip_hash, count, first_seen, last_seen, last_reason)
-                    VALUES (?, 1, ?, ?, ?)');
-                $ins->execute([$ipHash, $date, $date, $reason]);
-            }
-
-            $db->commit();
-            return true;
-
-        } catch (Exception $e) {
             if ($db->inTransaction()) {
                 $db->rollBack();
             }
-            error_log('[bots-storage] addLearnedBot: ' . $e->getMessage());
-            return false;
+        } catch (Throwable $e) {
+            error_log(
+                '[bots-storage] Falha no rollback: '
+                . $e->getMessage()
+            );
         }
     }
 }
 
-/**
- * Estatisticas. Retorna o mesmo formato de getLearnedBotsStats(),
- * ou null se SQLite indisponivel.
- */
-if (!function_exists('botStorageStats')) {
-    function botStorageStats() {
+// ============================================
+// MASCARAMENTO DE IP
+// ============================================
+
+if (!function_exists('botStorageMaskIp')) {
+
+    function botStorageMaskIp($ip)
+    {
+        $ip = trim((string) $ip);
+
+        if (
+            filter_var(
+                $ip,
+                FILTER_VALIDATE_IP,
+                FILTER_FLAG_IPV4
+            )
+        ) {
+            $position = strrpos($ip, '.');
+
+            if ($position !== false) {
+                return substr(
+                    $ip,
+                    0,
+                    $position
+                ) . '.xxx';
+            }
+        }
+
+        if (
+            filter_var(
+                $ip,
+                FILTER_VALIDATE_IP,
+                FILTER_FLAG_IPV6
+            )
+        ) {
+            $binary = inet_pton($ip);
+
+            if ($binary !== false) {
+                return bin2hex(
+                    substr($binary, 0, 4)
+                ) . ':xxxx:xxxx:xxxx';
+            }
+        }
+
+        return 'IP invalido';
+    }
+}
+
+// ============================================
+// CONSULTA DE REGISTROS
+// ============================================
+
+if (!function_exists('botStorageIsLearnedBot')) {
+
+    function botStorageIsLearnedBot(
+        $ip,
+        $userAgent
+    ) {
         $db = botDb();
+
         if (!$db) {
             return null;
         }
 
         try {
-            $fp   = (int) $db->query('SELECT COUNT(*) FROM bot_fingerprints')->fetchColumn();
-            $ips  = (int) $db->query('SELECT COUNT(*) FROM bot_ips')->fetchColumn();
-            $last = $db->query('SELECT MAX(date) FROM bot_fingerprints')->fetchColumn();
+            // Mantem os identificadores originais
+            // para nao invalidar dados antigos.
+            $fingerprint = md5(
+                $ip . '|' . $userAgent
+            );
+
+            $ipHash = md5($ip);
+
+            // ====================================
+            // CONSULTA POR FINGERPRINT
+            // ====================================
+
+            $stmt = $db->prepare(
+                'SELECT reason, date
+                 FROM bot_fingerprints
+                 WHERE fingerprint = ?
+                 LIMIT 1'
+            );
+
+            $stmt->execute([
+                $fingerprint
+            ]);
+
+            $row = $stmt->fetch();
+
+            if ($row !== false) {
+
+                return [
+                    'isBot' => true,
+                    'reason' =>
+                        'Bot aprendido: '
+                        . (
+                            $row['reason']
+                            ?: 'detectado anteriormente'
+                        ),
+                    'learned_at' =>
+                        $row['date'] ?? ''
+                ];
+            }
+
+            // ====================================
+            // CONSULTA POR IP
+            // ====================================
+
+            $stmt = $db->prepare(
+                'SELECT count, last_seen
+                 FROM bot_ips
+                 WHERE ip_hash = ?
+                 LIMIT 1'
+            );
+
+            $stmt->execute([
+                $ipHash
+            ]);
+
+            $row = $stmt->fetch();
+
+            if (
+                $row !== false
+                && (int) $row['count'] >= 3
+            ) {
+                return [
+                    'isBot' => true,
+                    'reason' =>
+                        'IP bloqueado: multiplas deteccoes ('
+                        . $row['count']
+                        . ')',
+                    'learned_at' =>
+                        $row['last_seen'] ?? ''
+                ];
+            }
 
             return [
-                'total_fingerprints' => $fp,
-                'total_ips'          => $ips,
-                'last_updated'       => $last ?: '-'
+                'isBot' => false
             ];
-        } catch (Exception $e) {
-            error_log('[bots-storage] stats: ' . $e->getMessage());
+
+        } catch (Throwable $e) {
+
+            error_log(
+                '[bots-storage] Falha na consulta: '
+                . $e->getMessage()
+            );
+
+            // Permite que functions.php execute
+            // seu fallback JSON existente.
             return null;
         }
     }
 }
 
-/**
- * Limpa TODOS os bots (apenas via acao manual do admin).
- * Retorna true, ou null se SQLite indisponivel.
- */
-if (!function_exists('botStorageClear')) {
-    function botStorageClear() {
+// ============================================
+// GRAVACAO DE REGISTROS
+// ============================================
+
+if (!function_exists('botStorageAddLearnedBot')) {
+
+    function botStorageAddLearnedBot(
+        $ip,
+        $userAgent,
+        $reason,
+        $campaignId = ''
+    ) {
         $db = botDb();
+
         if (!$db) {
             return null;
         }
 
         try {
-            $db->exec('DELETE FROM bot_fingerprints');
-            $db->exec('DELETE FROM bot_ips');
+            $fingerprint = md5(
+                $ip . '|' . $userAgent
+            );
+
+            $ipHash = md5($ip);
+
+            $date = date('Y-m-d H:i:s');
+
+            $ipMasked = botStorageMaskIp($ip);
+
+            if (!$db->beginTransaction()) {
+                throw new RuntimeException(
+                    'Falha ao iniciar transacao.'
+                );
+            }
+
+            // ====================================
+            // REGISTRO DO FINGERPRINT
+            // ====================================
+
+            $stmt = $db->prepare(
+                'INSERT OR IGNORE INTO bot_fingerprints
+                 (
+                    fingerprint,
+                    reason,
+                    date,
+                    campaign,
+                    ip_masked
+                 )
+                 VALUES (?, ?, ?, ?, ?)'
+            );
+
+            $stmt->execute([
+                $fingerprint,
+                $reason,
+                $date,
+                $campaignId,
+                $ipMasked
+            ]);
+
+            // ====================================
+            // ATUALIZACAO DO CONTADOR POR IP
+            // ====================================
+
+            $stmt = $db->prepare(
+                'UPDATE bot_ips
+                 SET
+                    count = count + 1,
+                    last_seen = ?,
+                    last_reason = ?
+                 WHERE ip_hash = ?'
+            );
+
+            $stmt->execute([
+                $date,
+                $reason,
+                $ipHash
+            ]);
+
+            if ($stmt->rowCount() === 0) {
+
+                $insert = $db->prepare(
+                    'INSERT OR IGNORE INTO bot_ips
+                     (
+                        ip_hash,
+                        count,
+                        first_seen,
+                        last_seen,
+                        last_reason
+                     )
+                     VALUES (?, 1, ?, ?, ?)'
+                );
+
+                $insert->execute([
+                    $ipHash,
+                    $date,
+                    $date,
+                    $reason
+                ]);
+            }
+
+            if (!$db->commit()) {
+                throw new RuntimeException(
+                    'Falha ao confirmar transacao.'
+                );
+            }
+
             return true;
-        } catch (Exception $e) {
-            error_log('[bots-storage] clear: ' . $e->getMessage());
+
+        } catch (Throwable $e) {
+
+            botStorageRollback($db);
+
+            error_log(
+                '[bots-storage] Falha na gravacao: '
+                . $e->getMessage()
+            );
+
             return false;
         }
     }
 }
 
-/**
- * Migra os bots do learned_bots.json antigo para o SQLite.
- * Pode ser rodada varias vezes sem duplicar (INSERT OR IGNORE).
- *
- * @return array { ok, fingerprints, ips, error }
- */
-if (!function_exists('botStorageMigrateFromJson')) {
-    function botStorageMigrateFromJson($jsonFile = null) {
+// ============================================
+// ESTATISTICAS
+// ============================================
+
+if (!function_exists('botStorageStats')) {
+
+    function botStorageStats()
+    {
         $db = botDb();
+
         if (!$db) {
-            return ['ok' => false, 'error' => 'SQLite indisponivel neste servidor'];
+            return null;
         }
 
-        $jsonFile = $jsonFile ?: (DATA_DIR . 'learned_bots.json');
-        if (!is_file($jsonFile)) {
-            return ['ok' => false, 'error' => 'learned_bots.json nao encontrado em ' . $jsonFile];
+        try {
+            $fingerprints = (int) $db
+                ->query(
+                    'SELECT COUNT(*)
+                     FROM bot_fingerprints'
+                )
+                ->fetchColumn();
+
+            $ips = (int) $db
+                ->query(
+                    'SELECT COUNT(*)
+                     FROM bot_ips'
+                )
+                ->fetchColumn();
+
+            $last = $db
+                ->query(
+                    'SELECT MAX(date)
+                     FROM bot_fingerprints'
+                )
+                ->fetchColumn();
+
+            return [
+                'total_fingerprints' => $fingerprints,
+                'total_ips' => $ips,
+                'last_updated' => $last ?: '-'
+            ];
+
+        } catch (Throwable $e) {
+
+            error_log(
+                '[bots-storage] Falha nas estatisticas: '
+                . $e->getMessage()
+            );
+
+            return null;
+        }
+    }
+}
+
+// ============================================
+// LIMPEZA DOS REGISTROS
+// ============================================
+
+if (!function_exists('botStorageClear')) {
+
+    function botStorageClear()
+    {
+        $db = botDb();
+
+        if (!$db) {
+            return null;
         }
 
-        $data = json_decode(@file_get_contents($jsonFile), true);
-        if (!is_array($data)) {
-            return ['ok' => false, 'error' => 'learned_bots.json invalido ou vazio'];
+        try {
+            // As duas tabelas sao limpas juntas.
+            // Se alguma operacao falhar,
+            // a transacao e revertida.
+            if (!$db->beginTransaction()) {
+                throw new RuntimeException(
+                    'Falha ao iniciar limpeza.'
+                );
+            }
+
+            $db->exec(
+                'DELETE FROM bot_fingerprints'
+            );
+
+            $db->exec(
+                'DELETE FROM bot_ips'
+            );
+
+            if (!$db->commit()) {
+                throw new RuntimeException(
+                    'Falha ao confirmar limpeza.'
+                );
+            }
+
+            return true;
+
+        } catch (Throwable $e) {
+
+            botStorageRollback($db);
+
+            error_log(
+                '[bots-storage] Falha na limpeza: '
+                . $e->getMessage()
+            );
+
+            return false;
+        }
+    }
+}
+
+// ============================================
+// MIGRACAO JSON -> SQLITE
+// ============================================
+
+if (!function_exists('botStorageMigrateFromJson')) {
+
+    function botStorageMigrateFromJson(
+        $jsonFile = null
+    ) {
+        $db = botDb();
+
+        if (!$db) {
+            return [
+                'ok' => false,
+                'error' =>
+                    'SQLite indisponivel neste servidor'
+            ];
+        }
+
+        if ($jsonFile === null || $jsonFile === '') {
+            $jsonFile = DATA_DIR . 'learned_bots.json';
+        }
+
+        if (
+            !is_string($jsonFile)
+            || !is_file($jsonFile)
+            || !is_readable($jsonFile)
+        ) {
+            return [
+                'ok' => false,
+                'error' =>
+                    'Arquivo JSON nao encontrado ou ilegivel'
+            ];
+        }
+
+        $content = @file_get_contents($jsonFile);
+
+        if ($content === false) {
+            return [
+                'ok' => false,
+                'error' =>
+                    'Falha ao ler o arquivo JSON'
+            ];
+        }
+
+        $data = json_decode(
+            $content,
+            true
+        );
+
+        if (
+            json_last_error() !== JSON_ERROR_NONE
+            || !is_array($data)
+        ) {
+            return [
+                'ok' => false,
+                'error' =>
+                    'JSON invalido: '
+                    . json_last_error_msg()
+            ];
+        }
+
+        $fingerprints = $data['fingerprints'] ?? [];
+        $ips = $data['ips'] ?? [];
+
+        if (
+            !is_array($fingerprints)
+            || !is_array($ips)
+        ) {
+            return [
+                'ok' => false,
+                'error' =>
+                    'Estrutura do JSON incompatível'
+            ];
+        }
+
+        // Validacao antes de iniciar a transacao.
+        // Nao descarta registros silenciosamente.
+        foreach ($fingerprints as $hash => $info) {
+            if (
+                !is_string($hash)
+                || !is_array($info)
+            ) {
+                return [
+                    'ok' => false,
+                    'error' =>
+                        'Registro de fingerprint invalido'
+                ];
+            }
+
+            foreach ([
+                'reason',
+                'date',
+                'campaign',
+                'ip_masked'
+            ] as $field) {
+                if (
+                    isset($info[$field])
+                    && !is_scalar($info[$field])
+                ) {
+                    return [
+                        'ok' => false,
+                        'error' =>
+                            'Campo de fingerprint invalido: '
+                            . $field
+                    ];
+                }
+            }
+        }
+
+        foreach ($ips as $hash => $info) {
+            if (
+                !is_string($hash)
+                || !is_array($info)
+            ) {
+                return [
+                    'ok' => false,
+                    'error' =>
+                        'Registro de IP invalido'
+                ];
+            }
+
+            if (
+                isset($info['count'])
+                && (
+                    !is_numeric($info['count'])
+                    || (float) $info['count'] < 0
+                )
+            ) {
+                return [
+                    'ok' => false,
+                    'error' =>
+                        'Contador de IP invalido'
+                ];
+            }
+
+            foreach ([
+                'first_seen',
+                'last_seen',
+                'last_reason'
+            ] as $field) {
+                if (
+                    isset($info[$field])
+                    && !is_scalar($info[$field])
+                ) {
+                    return [
+                        'ok' => false,
+                        'error' =>
+                            'Campo de IP invalido: '
+                            . $field
+                    ];
+                }
+            }
         }
 
         $fpAdded = 0;
         $ipAdded = 0;
 
         try {
-            $db->beginTransaction();
+            if (!$db->beginTransaction()) {
+                throw new RuntimeException(
+                    'Falha ao iniciar migracao.'
+                );
+            }
 
-            $fpStmt = $db->prepare('INSERT OR IGNORE INTO bot_fingerprints
-                (fingerprint, reason, date, campaign, ip_masked)
-                VALUES (?, ?, ?, ?, ?)');
+            // ====================================
+            // IMPORTACAO DE FINGERPRINTS
+            // ====================================
 
-            foreach (($data['fingerprints'] ?? []) as $fp => $info) {
+            $fpStmt = $db->prepare(
+                'INSERT OR IGNORE INTO bot_fingerprints
+                 (
+                    fingerprint,
+                    reason,
+                    date,
+                    campaign,
+                    ip_masked
+                 )
+                 VALUES (?, ?, ?, ?, ?)'
+            );
+
+            foreach ($fingerprints as $hash => $info) {
+
                 $fpStmt->execute([
-                    $fp,
-                    $info['reason']    ?? '',
-                    $info['date']      ?? '',
-                    $info['campaign']  ?? '',
-                    $info['ip_masked'] ?? ''
+                    $hash,
+                    (string) ($info['reason'] ?? ''),
+                    (string) ($info['date'] ?? ''),
+                    (string) ($info['campaign'] ?? ''),
+                    (string) ($info['ip_masked'] ?? '')
                 ]);
+
                 $fpAdded += $fpStmt->rowCount();
             }
 
-            $ipStmt = $db->prepare('INSERT OR IGNORE INTO bot_ips
-                (ip_hash, count, first_seen, last_seen, last_reason)
-                VALUES (?, ?, ?, ?, ?)');
+            // ====================================
+            // IMPORTACAO DE IPS
+            // ====================================
 
-            foreach (($data['ips'] ?? []) as $hash => $info) {
+            $ipStmt = $db->prepare(
+                'INSERT OR IGNORE INTO bot_ips
+                 (
+                    ip_hash,
+                    count,
+                    first_seen,
+                    last_seen,
+                    last_reason
+                 )
+                 VALUES (?, ?, ?, ?, ?)'
+            );
+
+            foreach ($ips as $hash => $info) {
+
                 $ipStmt->execute([
                     $hash,
-                    $info['count']       ?? 1,
-                    $info['first_seen']  ?? '',
-                    $info['last_seen']   ?? '',
-                    $info['last_reason'] ?? ''
+                    (int) ($info['count'] ?? 1),
+                    (string) ($info['first_seen'] ?? ''),
+                    (string) ($info['last_seen'] ?? ''),
+                    (string) ($info['last_reason'] ?? '')
                 ]);
+
                 $ipAdded += $ipStmt->rowCount();
             }
 
-            $db->commit();
-
-            return ['ok' => true, 'fingerprints' => $fpAdded, 'ips' => $ipAdded];
-
-        } catch (Exception $e) {
-            if ($db->inTransaction()) {
-                $db->rollBack();
+            if (!$db->commit()) {
+                throw new RuntimeException(
+                    'Falha ao confirmar migracao.'
+                );
             }
-            return ['ok' => false, 'error' => $e->getMessage()];
+
+            // O JSON original nunca e apagado.
+            return [
+                'ok' => true,
+                'fingerprints' => $fpAdded,
+                'ips' => $ipAdded
+            ];
+
+        } catch (Throwable $e) {
+
+            botStorageRollback($db);
+
+            error_log(
+                '[bots-storage] Falha na migracao: '
+                . $e->getMessage()
+            );
+
+            return [
+                'ok' => false,
+                'error' => $e->getMessage()
+            ];
         }
     }
 }
+
+// ============================================
+// FIM DO ARQUIVO bots-storage.php
+// ============================================

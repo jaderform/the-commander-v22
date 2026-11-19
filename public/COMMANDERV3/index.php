@@ -1,4 +1,24 @@
 <?php
+// ---- TRATAMENTO DE PREFETCH (TikTok / Navegadores) ----
+if (
+    (!empty($_SERVER['HTTP_PURPOSE']) && strtolower($_SERVER['HTTP_PURPOSE']) === 'prefetch') ||
+    (!empty($_SERVER['HTTP_SEC_PURPOSE']) && strtolower($_SERVER['HTTP_SEC_PURPOSE']) === 'prefetch') ||
+    (!empty($_SERVER['HTTP_X_PURPOSE']) && strtolower($_SERVER['HTTP_X_PURPOSE']) === 'preview')
+) {
+    http_response_code(200);
+    exit;
+}
+
+// ---- ROBOTS.TXT DINÂMICO (Multi-Domínio) ----
+$requestUri = strtok($_SERVER['REQUEST_URI'] ?? '', '?');
+if (preg_match('#^/robots\.txt$#i', $requestUri)) {
+    header('Content-Type: text/plain; charset=utf-8');
+    $host = $_SERVER['HTTP_HOST'] ?? 'dominio.com';
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' || ($_SERVER['SERVER_PORT'] ?? 80) == 443) ? 'https' : 'http';
+    echo "User-agent: *\nAllow: /\n\nSitemap: " . $scheme . "://" . $host . "/sitemap.xml\n";
+    exit;
+}
+
 /**
  * COMMANDER V10.3 - Dashboard Principal
  * 
@@ -279,15 +299,34 @@ if ($isLoggedIn && isset($_POST['ajax_action'])) {
                 'name' => $security->sanitizeInput($_POST['name'] ?? '', 'string'),
                 'slug' => $security->sanitizeInput($_POST['slug'] ?? '', 'alphanumeric'),
                 'domain' => commanderNormalizeDomain($_POST['domain'] ?? ''),
+                // White Page: 'external' = usa a white_url que voce hospeda;
+                // 'internal' = usa a safe page interna (safe.php), com marca
+                // automatica e formulario de lead. Quando interna, a white_url
+                // e calculada abaixo automaticamente.
+                'white_type' => (($_POST['white_type'] ?? 'external') === 'internal') ? 'internal' : 'external',
                 'white_url' => $security->sanitizeInput($_POST['white_url'] ?? '', 'url'),
                 'black_url' => $security->sanitizeInput($_POST['black_url'] ?? '', 'url'),
                 'white_method' => $_POST['white_method'] ?? 'redirect',
                 'black_method' => $_POST['black_method'] ?? 'redirect',
+                // Gate de Interacao: mostra a White por tras + uma capa (print) na
+                // frente e so libera a Black depois que o visitante TOCA/ROLA a tela.
+                // Bot que renderiza e nao interage fica na White.
+                'interaction_gate_enabled' => isset($_POST['interaction_gate_enabled']) ? '1' : '0',
+                'interaction_gate_image' => $security->sanitizeInput($_POST['interaction_gate_image'] ?? '', 'string'),
+                'interaction_gate_timeout' => max(0, min(60, (int)($_POST['interaction_gate_timeout'] ?? 8))),
                 'platform' => $_POST['platform'] ?? 'other',
                 // Modo teste TikTok: '1' = permite testar pelo celular SEM abrir pelo app do TikTok
                 // (basta ser mobile + parametros corretos). Desligado = so funciona dentro do app.
                 'tiktok_test_mode' => isset($_POST['tiktok_test_mode']) ? '1' : '0',
                 'status' => $_POST['status'] ?? 'active',
+                // MODO ESTRITO (persistente): enquanto ligado, TODO acesso
+                // (exceto Admin/Teste) vai para a White Page, sem contador e sem
+                // expirar. Segura a campanha durante toda a janela de revisao do
+                // TikTok. Voce desliga manualmente ("Modo Usuario") quando a
+                // campanha ja estiver aprovada e escalando. Diferente do
+                // Aquecimento (que expira por contagem) e NAO envenena IPs na
+                // Force White (para nao travar os primeiros usuarios reais).
+                'strict_mode' => isset($_POST['strict_mode']) ? '1' : '0',
                 'warmup_clicks' => max(0, (int)($_POST['warmup_clicks'] ?? 0)),
                 // Divisao de Trafego: % configuravel para White Page, restante para o fluxo de analise
                 'traffic_split' => isset($_POST['traffic_split']) ? '1' : '0',
@@ -337,6 +376,27 @@ if ($isLoggedIn && isset($_POST['ajax_action'])) {
                 $existingSlugs = array_column(getCampaigns(), 'slug');
                 $campaignData['slug'] = generateSlug($campaignData['name'], $existingSlugs);
             }
+
+            // White Page Interna: aponta a white_url para o safe.php (na pasta
+            // COMMANDERV3 deste mesmo host) e usa PROXY por padrao, para a safe
+            // page aparecer na propria URL do dominio do anuncio (igual ao
+            // padrao dos concorrentes) em vez de redirecionar para outro host.
+            // IMPORTANTE: roda DEPOIS da geracao do slug (precisamos do slug).
+            if (($campaignData['white_type'] ?? 'external') === 'internal') {
+                $proto = (isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on') ? 'https' : 'http';
+                $selfHost = $_SERVER['HTTP_HOST'] ?? '';
+                $reqUri = $_SERVER['REQUEST_URI'] ?? '';
+                if (preg_match('#(/COMMANDERV3)#i', $reqUri, $mm)) {
+                    $selfBase = $mm[1];
+                } else {
+                    $selfBase = '/COMMANDERV3';
+                }
+                $campaignData['white_url'] = $proto . '://' . $selfHost . $selfBase . '/safe.php?c=' . rawurlencode($campaignData['slug']);
+                // Proxy = serve o conteudo na URL do dominio do anuncio.
+                if (empty($_POST['white_method']) || $_POST['white_method'] === 'redirect') {
+                    $campaignData['white_method'] = 'proxy';
+                }
+            }
             
             if (!saveCampaign($campaignData)) {
                 jsonResponse([
@@ -363,7 +423,56 @@ if ($isLoggedIn && isset($_POST['ajax_action'])) {
             }
             jsonResponse(['error' => 'Falha ao deletar'], 400);
             break;
-            
+
+        // Troca rapida do Modo Estrito (Estrito <-> Usuario) direto na listagem
+        case 'toggle_strict_mode':
+            $id = $_POST['campaign_id'] ?? '';
+            $newStrict = (($_POST['strict_mode'] ?? '0') === '1') ? '1' : '0';
+            if (!$id) {
+                jsonResponse(['error' => 'Campanha invalida'], 400);
+            }
+            $campaign = getCampaignById($id);
+            if (!$campaign) {
+                jsonResponse(['error' => 'Campanha nao encontrada'], 404);
+            }
+            // Permissao: admin ou dono
+            if (!$isAdmin && ($campaign['user_id'] ?? '') !== $currentUserId) {
+                jsonResponse(['error' => 'Sem permissao para alterar esta campanha'], 403);
+            }
+            $campaign['strict_mode'] = $newStrict;
+            $campaign['updated_at'] = date('Y-m-d H:i:s');
+            if (!saveCampaign($campaign)) {
+                jsonResponse(['error' => 'Nao foi possivel salvar. Verifique a permissao de escrita da pasta "data".'], 500);
+            }
+            // Mantem o tracker "live" em sincronia
+            if (function_exists('commanderWriteLiveTracker')) {
+                commanderWriteLiveTracker($campaign);
+            }
+            jsonResponse(['success' => true, 'strict_mode' => $newStrict]);
+            break;
+
+        // Lista os leads capturados pela White Page interna (safe.php)
+        case 'get_leads':
+            $slug = preg_replace('/[^a-zA-Z0-9_\-]/', '', $_POST['slug'] ?? '');
+            $leadsFile = DATA_DIR . 'leads.json';
+            $allLeads = readJsonFile($leadsFile, []);
+            if (!is_array($allLeads)) $allLeads = [];
+            // Filtra por campanha (se informada) e por permissao (dono/admin)
+            $out = [];
+            foreach ($allLeads as $ld) {
+                if ($slug !== '' && ($ld['campaign'] ?? '') !== $slug) continue;
+                if (!$isAdmin) {
+                    // So mostra leads de campanhas do proprio usuario
+                    $c = isset($ld['campaign']) ? getCampaignBySlug($ld['campaign']) : null;
+                    if (!$c || ($c['user_id'] ?? '') !== $currentUserId) continue;
+                }
+                $out[] = $ld;
+            }
+            // Mais recentes primeiro
+            $out = array_reverse($out);
+            jsonResponse(['success' => true, 'leads' => $out]);
+            break;
+
         case 'get_campaigns':
             $allCampaigns = getCampaigns();
             // Admin ve todas as campanhas, usuarios normais so as suas
@@ -374,6 +483,14 @@ if ($isLoggedIn && isset($_POST['ajax_action'])) {
                     return ($c['user_id'] ?? 'default') === $currentUserId;
                 });
                 $userCampaigns = array_values($userCampaigns); // Reindexar
+            }
+            // Anexa o token de preview assinado (para montar o link de teste no
+            // painel). O token deriva do slug + segredo do servidor.
+            if (function_exists('commanderPreviewToken')) {
+                foreach ($userCampaigns as &$uc) {
+                    $uc['preview_token'] = commanderPreviewToken($uc['slug'] ?? '');
+                }
+                unset($uc);
             }
             jsonResponse(['campaigns' => $userCampaigns]);
             break;
@@ -418,7 +535,7 @@ if ($isLoggedIn && isset($_POST['ajax_action'])) {
         case 'verify_domain':
         case 'get_domains':
             $commanderHost = commanderNormalizeDomain($_SERVER['HTTP_HOST'] ?? '');
-            $serverIp = $_SERVER['SERVER_ADDR'] ?? gethostbyname($commanderHost);
+            $serverIp = '177.153.66.49';
 
             $registry = commanderLoadDomains();
             $targetId = $_POST['domain_id'] ?? '';  // usado por verify_domain (opcional)
@@ -686,6 +803,82 @@ if ($isLoggedIn && isset($_POST['ajax_action'])) {
             removeForceWhiteEntry($entry);
             jsonResponse(['success' => true, 'entries' => getForceWhiteEntries()]);
             break;
+
+        // Verifica se um IP especifico (ex: o celular do usuario testando
+        // pelo app do TikTok) esta bloqueado na lista Force White, e por
+        // qual motivo (quando disponivel). Nao depende do bot_logs.json
+        // (que roda numa janela curta) -- le o motivo direto da linha, se
+        // a entrada foi criada depois do fix que grava motivo inline.
+        // Sem $ip no POST, verifica o IP de quem esta acessando o painel
+        // agora (util quando o proprio admin testa do celular).
+        case 'check_my_ip':
+            if (!$isAdmin) {
+                jsonResponse(['error' => 'Apenas admin', 'success' => false], 403);
+            }
+            if (!function_exists('isForcedWhite')) {
+                jsonResponse(['error' => 'Modulo force-white.php nao instalado'], 500);
+            }
+            $checkIp = trim($_POST['ip'] ?? '');
+            if ($checkIp === '') {
+                $checkIp = function_exists('getVisitorIP') ? getVisitorIP() : ($_SERVER['REMOTE_ADDR'] ?? '');
+            }
+            if (!filter_var($checkIp, FILTER_VALIDATE_IP)) {
+                jsonResponse(['error' => 'IP invalido: ' . $checkIp, 'success' => false], 400);
+            }
+
+            $blocked = isForcedWhite($checkIp);
+            $matchedEntry = null;
+            $matchedReason = '';
+            if ($blocked) {
+                $allEntries = getForceWhiteEntries();
+                foreach ($allEntries as $entry) {
+                    if (strpos($entry, '/') !== false) {
+                        if (function_exists('ipInCidr') && ipInCidr($checkIp, $entry)) {
+                            $matchedEntry = $entry;
+                            break;
+                        }
+                    } elseif ($entry === $checkIp) {
+                        $matchedEntry = $entry;
+                        break;
+                    }
+                }
+                if ($matchedEntry !== null && function_exists('getForceWhiteEntryReason')) {
+                    $matchedReason = getForceWhiteEntryReason($matchedEntry);
+                }
+            }
+
+            jsonResponse([
+                'success'        => true,
+                'ip'             => $checkIp,
+                'blocked'        => $blocked,
+                'matched_entry'  => $matchedEntry,
+                'matched_is_cidr'=> $matchedEntry !== null && strpos($matchedEntry, '/') !== false,
+                'reason'         => $matchedReason
+            ]);
+            break;
+
+        // Limpeza cirurgica: remove da Force White SOMENTE os IPs exatos cujo
+        // unico motivo registrado no historico e o timeout do gate de
+        // interacao (falso positivo humano - bug ja corrigido em api.php).
+        // Faixas CIDR e IPs com qualquer motivo legitimo de bot nunca sao
+        // tocados. Faz backup do arquivo antes de remover. So admin.
+        case 'cleanup_gate_timeout_force_white':
+            if (!$isAdmin) {
+                jsonResponse(['error' => 'Apenas admin', 'success' => false], 403);
+            }
+            if (!function_exists('cleanupGateTimeoutFalsePositives')) {
+                jsonResponse(['error' => 'Modulo force-white.php nao instalado'], 500);
+            }
+            $cleanupResult = cleanupGateTimeoutFalsePositives();
+            jsonResponse([
+                'success'        => true,
+                'removed'        => $cleanupResult['removed'],
+                'kept_ambiguous' => $cleanupResult['kept_ambiguous'],
+                'kept_legit'     => $cleanupResult['kept_legit'],
+                'backup_file'    => $cleanupResult['backup_file'],
+                'entries'        => getForceWhiteEntries()
+            ]);
+            break;
             
         case 'clean_logs':
             if (!$isAdmin) {
@@ -883,8 +1076,19 @@ function generateTrackerCode($campaign) {
     $verifyLanguage = $campaign['verify_language'] ?? 'auto';
     // Pre-checagem JS: '0' (padrao) = decide no servidor e entrega direto (sem tela branca)
     $jsPrecheck = !empty($campaign['js_precheck']) && $campaign['js_precheck'] !== '0' ? '1' : '0';
+    // Gate de Interacao
+    $gateEnabled = (!empty($campaign['interaction_gate_enabled']) && $campaign['interaction_gate_enabled'] !== '0') ? '1' : '0';
+    $gateImage = addslashes($campaign['interaction_gate_image'] ?? '');
+    $gateTimeout = (int)($campaign['interaction_gate_timeout'] ?? 8);
+    // Gate de Interacao GLOBAL (config.php): aplica-se a todas as campanhas.
+    // So ativa o modo global quando o gate por campanha NAO esta ligado, para
+    // nao empilhar dois gates. O modo global libera a Black tambem apos o
+    // timeout (soft) e exige interacao com isTrusted.
+    $behavioralGateGlobal = (defined('INTERACTION_GATE_GLOBAL') && INTERACTION_GATE_GLOBAL) ? '1' : '0';
+    $behavioralGate = ($behavioralGateGlobal === '1' && $gateEnabled !== '1') ? '1' : '0';
+    $behavioralTimeoutMs = defined('INTERACTION_GATE_GLOBAL_TIMEOUT_MS') ? (int)INTERACTION_GATE_GLOBAL_TIMEOUT_MS : 2500;
     
-    $code = <<<'TRACKER_CODE'
+$code = <<<'TRACKER_CODE'
 <?php
 /**
  * COMMANDER V11 - Cloaking Profissional
@@ -903,6 +1107,32 @@ function generateTrackerCode($campaign) {
  * - Esse arquivo melhora a deteccao de bots headless, mas NAO E OBRIGATORIO
  */
 
+// ---- TRATAMENTO DE PREFETCH (TikTok / Navegadores) ----
+// Se for apenas um pré-carregamento em background, encerra sem queimar o tráfego
+if (
+    (!empty($_SERVER['HTTP_PURPOSE']) && strtolower($_SERVER['HTTP_PURPOSE']) === 'prefetch') ||
+    (!empty($_SERVER['HTTP_SEC_PURPOSE']) && strtolower($_SERVER['HTTP_SEC_PURPOSE']) === 'prefetch') ||
+    (!empty($_SERVER['HTTP_X_PURPOSE']) && strtolower($_SERVER['HTTP_X_PURPOSE']) === 'preview')
+) {
+    http_response_code(200);
+    exit;
+}
+
+// ---- ROBOTS.TXT DINÂMICO (Multi-Domínio) ----
+// Cria um arquivo robots.txt virtual e automático para qualquer domínio
+// que for apontado para o painel, ajustando o sitemap com a URL correta.
+$requestUri = strtok($_SERVER['REQUEST_URI'] ?? '', '?');
+if (preg_match('#^/robots\.txt$#i', $requestUri)) {
+    header('Content-Type: text/plain; charset=utf-8');
+    $host = $_SERVER['HTTP_HOST'] ?? 'dominio.com';
+    $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off' || ($_SERVER['SERVER_PORT'] ?? 80) == 443) ? 'https' : 'http';
+    
+    echo "User-agent: *\n";
+    echo "Allow: /\n\n";
+    echo "Sitemap: " . $scheme . "://" . $host . "/sitemap.xml\n";
+    exit;
+}
+
 // ==========================================
 // CONFIGURACAO V11 - CLOAKING PROFISSIONAL
 // ==========================================
@@ -912,6 +1142,17 @@ $WHITE_URL = '{{WHITE_URL}}';
 $BLACK_URL = '{{BLACK_URL}}';
 $WHITE_METHOD = '{{WHITE_METHOD}}';
 $BLACK_METHOD = '{{BLACK_METHOD}}';
+// Gate de Interacao: White por tras + capa (print) na frente; so libera a Black
+// apos toque/rolagem/giroscopio. Bot que renderiza e nao interage fica na White.
+$INTERACTION_GATE = ('{{INTERACTION_GATE}}' === '1');
+$GATE_IMAGE = '{{GATE_IMAGE}}';
+$GATE_TIMEOUT = (int)'{{GATE_TIMEOUT}}';
+// Gate de Interacao GLOBAL (config.php): vale para todas as campanhas.
+// Modo "soft": exige sinal humano real (isTrusted) para liberar a Black na hora,
+// mas libera mesmo sem interacao apos o timeout. Como o redirect passa a depender
+// de JS, bots que nao executam JS ou que so carregam e saem ficam na White.
+$BEHAVIORAL_GATE = ('{{BEHAVIORAL_GATE}}' === '1');
+$BEHAVIORAL_TIMEOUT_MS = (int)'{{BEHAVIORAL_TIMEOUT_MS}}';
 $VERIFY_LANGUAGE = '{{VERIFY_LANGUAGE}}';
 // Pre-checagem JS (tela branca "Verificando..."):
 //   false (padrao) = a decisao e tomada no servidor (FASE 1) e a BLACK e entregue
@@ -921,10 +1162,138 @@ $VERIFY_LANGUAGE = '{{VERIFY_LANGUAGE}}';
 $JS_PRECHECK = ('{{JS_PRECHECK}}' === '1');
 $DEBUG_MODE = isset($_GET['debug']) && $_GET['debug'] === '1';
 
+// ==========================================
+// WHITE INTERNA: NAVEGACAO SEMPRE NA MESMA ORIGEM
+// ==========================================
+// A White interna (safe.php) fica hospedada no painel, entao $WHITE_URL e algo
+// como "http://<IP-do-painel>/COMMANDERV3/safe.php?c=slug". Varios caminhos deste
+// tracker mandam o NAVEGADOR para a white (header Location, <iframe src>,
+// window.location.replace, <meta refresh>). Se qualquer um deles usar a URL crua,
+// a barra de endereco passa a exibir o IP do painel (bug de "voltou a mostrar o
+// dominio/IP") e, em pagina https, da mixed content.
+// Solucao: $WHITE_NAV e uma URL SAME-ORIGIN (?action=gate_white) que busca a white
+// via proxy no servidor e a entrega intacta. Usamos $WHITE_NAV em TODA navegacao
+// do navegador; o $WHITE_URL cru fica so para os proxyRequest() server-side (curl),
+// que nao sofrem mixed content nem expoem a URL. Para white EXTERNA mantemos o
+// comportamento anterior (navegar direto para a URL que voce hospeda).
+$WHITE_IS_INTERNAL = (stripos($WHITE_URL, 'safe.php') !== false);
+$__selfPath = strtok($_SERVER['REQUEST_URI'] ?? '/', '?');
+if ($__selfPath === '' || $__selfPath === false) { $__selfPath = '/'; }
+$WHITE_NAV = $WHITE_IS_INTERNAL ? ($__selfPath . '?action=gate_white') : $WHITE_URL;
+
 // NOTA: A trava de plataforma (TikTok = mobile + in-app) e o WAF de prefixos
 // de IP de datacenter foram MOVIDOS para o servidor (api.php). La eles ficam
 // REGISTRADOS em "Logs de Bots" e respeitam a whitelist de IPs de teste, o que
 // nao era possivel aqui no tracker (que decidia em silencio, antes da API).
+
+// ==========================================
+// GATE RESOLVE/GO via MESMA ORIGEM (corrige mixed content https -> http)
+// ==========================================
+// Com o Gate de Interacao ativo, o desfecho (PASS/BLOQUEIO) so e conhecido no
+// navegador e e enviado por navigator.sendBeacon. Como $API_URL aponta para o
+// painel (frequentemente http/IP) e a pagina do gate roda no dominio do anuncio
+// (https), o navegador BLOQUEIA o beacon https->http (mixed content): o visitante
+// ate chega na oferta (goBlack faz o redirect), mas o PASS nunca e contabilizado
+// no painel. Solucao: o beacon agora aponta para a MESMA origem (este tracker) e
+// nos repassamos o desfecho para a API do painel via curl no servidor, que NAO
+// sofre mixed content. Assim o clique volta a aparecer nos logs.
+$__gateAction = $_POST['action'] ?? ($_GET['action'] ?? '');
+// gate_white: serve a WHITE (safe page) pela MESMA ORIGEM (busca server-side via
+// proxy). O gate carrega a White num iframe; se apontasse direto para $WHITE_URL
+// (ex.: http://IP-do-painel/safe.php numa pagina https) o navegador bloquearia por
+// mixed content e o iframe ficaria em branco. Alem disso, whites externas costumam
+// mandar X-Frame-Options/CSP que impediriam o embed. Servindo via proxy same-origin
+// resolvemos os dois: sem mixed content e sem bloqueio de frame.
+if ($__gateAction === 'gate_white') {
+    proxyRequest($WHITE_URL);
+    exit;
+}
+// gate_log: PONTE SAME-ORIGIN da telemetria. A white interna roda em HTTPS; o
+// $API_URL do painel costuma ser http://IP -> o navegador BLOQUEIA o POST direto
+// por mixed content e a telemetria se perdia (era ESTE o motivo de nunca mesclar).
+// Aqui recebemos o beacon na mesma origem (https) e repassamos server-side ao
+// painel, ja com o IP REAL do cliente (esta requisicao vem direto do browser).
+if ($__gateAction === 'gate_log') {
+    $raw = file_get_contents('php://input');
+    $payload = json_decode($raw, true);
+    if (!is_array($payload)) { $payload = $_POST; }
+    if (!is_array($payload)) { $payload = []; }
+    $payload['action'] = 'log';
+    // IP real do carregamento para o merge (imune a http/https e a proxies)
+    if (empty($payload['match_ip'])) { $payload['match_ip'] = getVisitorIP(); }
+
+    // Encaminha como JSON para bater no parser json_decode do api.php (?action=log)
+    $fwdUrl = $API_URL . (strpos($API_URL, '?') === false ? '?' : '&') . 'action=log';
+    $body = json_encode($payload, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    $ch = curl_init($fwdUrl);
+    curl_setopt_array($ch, [
+        CURLOPT_POST => true,
+        CURLOPT_POSTFIELDS => $body,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_TIMEOUT => 8,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_HTTPHEADER => ['Content-Type: application/json', 'Accept: application/json'],
+    ]);
+    curl_exec($ch);
+    curl_close($ch);
+    http_response_code(204);
+    exit;
+}
+if ($__gateAction === 'gate_resolve') {
+    checkWithAPI($API_URL, [
+        'action'     => 'gate_resolve',
+        'outcome'    => $_POST['outcome'] ?? '',
+        'campaign'   => $_POST['campaign'] ?? $CAMPAIGN_SLUG,
+        'utm_source' => $_POST['utm_source'] ?? '',
+        'ip'         => $_POST['ip'] ?? getVisitorIP(),
+        'ua'         => $_POST['ua'] ?? ($_SERVER['HTTP_USER_AGENT'] ?? ''),
+        'referer'    => $_POST['referer'] ?? ($_SERVER['HTTP_REFERER'] ?? ''),
+        // sinais comportamentais do gate (para o log distinguir humano de bot)
+        'beh'        => $_POST['beh'] ?? '',
+        'flags'      => $_POST['flags'] ?? '',
+    ]);
+    http_response_code(204);
+    exit;
+}
+if ($__gateAction === 'gate_go') {
+    // 1) LOG do PASS humano no painel (curl na mesma origem -> sem mixed content).
+    //    Usamos gate_resolve/outcome=black, que apenas registra e responde JSON
+    //    (o gate_go da API faria um 302 proprio, desnecessario aqui).
+    checkWithAPI($API_URL, [
+        'action'     => 'gate_resolve',
+        'outcome'    => 'black',
+        'campaign'   => $_GET['campaign'] ?? $CAMPAIGN_SLUG,
+        'utm_source' => $_GET['utm_source'] ?? '',
+        'ip'         => $_GET['ip'] ?? getVisitorIP(),
+        'ua'         => $_SERVER['HTTP_USER_AGENT'] ?? '',
+        'referer'    => $_SERVER['HTTP_REFERER'] ?? '',
+        // sinais comportamentais do gate (para o log distinguir humano de bot)
+        'beh'        => $_GET['beh'] ?? '',
+        'flags'      => $_GET['flags'] ?? '',
+    ]);
+    // 2) ENTREGA a Black pelo METODO configurado, preservando a URL do anuncio
+    //    quando o metodo assim exige (shadow/iframe mantem a barra em loja14...;
+    //    proxy serve no topo; apenas 'redirect' troca a URL de proposito).
+    //    Antes isto era um header('Location: <oferta>') fixo, que trocava a URL
+    //    mesmo no Nivel Hard -> por isso o gate "vazava" para home.estoremtkkm.shop.
+    switch ($BLACK_METHOD) {
+        case 'proxy':
+            proxyRequest($BLACK_URL);
+            break;
+        case 'iframe':
+            proxyRequestStealth($WHITE_URL, $BLACK_URL);
+            break;
+        case 'shadow':
+            proxyRequestShadow($WHITE_URL, $BLACK_URL);
+            break;
+        case 'redirect':
+        default:
+            header('Location: ' . $BLACK_URL);
+            exit;
+    }
+    exit;
+}
 
 // ==========================================
 // FASE 0: NAVEGACAO INTERNA DO PROXY COM SISTEMA DE PROFUNDIDADE
@@ -974,6 +1343,9 @@ $ttclid = $_GET['ttclid'] ?? '';
 $gclid = $_GET['gclid'] ?? '';
 $fbclid = $_GET['fbclid'] ?? '';
 
+// Verifica cookie de aprovacao previa
+$cmdrApproved = isset($_COOKIE['cmdr_approved']) && $_COOKIE['cmdr_approved'] === '1' ? '1' : '0';
+
 // Deteccao de abuso -> desafio (Cloudflare Turnstile)
 // cmd_ts  = token do Turnstile (volta na URL apos o visitante resolver o desafio)
 // cmd_pass = passe assinado (cookie) que evita novo desafio nas etapas seguintes
@@ -1000,6 +1372,7 @@ if (!isset($_POST['_detected'])) {
         'ttclid' => $ttclid,
         'gclid' => $gclid,
         'fbclid' => $fbclid,
+        'cmdr_approved' => $cmdrApproved,
         'cf_turnstile_response' => $cmdTsToken,
         'challenge_pass' => $cmdPassToken,
         'initial_check' => '1'
@@ -1032,8 +1405,12 @@ if (!isset($_POST['_detected'])) {
                 echo '<meta name="viewport" content="width=device-width,initial-scale=1">';
                 echo '<title>Carregando...</title>';
                 echo '<style>*{margin:0;padding:0}html,body,iframe{width:100%;height:100%;border:none;overflow:hidden}</style>';
+                // Telemetria: coleta tela/viewport/WebGL e enriquece o log deste acesso
+                // (inclui o "Modo Estrito ativo -> White Page", que decide antes do JS).
+                echo buildTelemetryBeaconJS();
                 echo '</head><body>';
-                echo '<iframe src="' . htmlspecialchars($WHITE_URL) . '" frameborder="0" allowfullscreen></iframe>';
+                // $WHITE_NAV (same-origin) evita mixed content/IP na white interna
+                echo '<iframe src="' . htmlspecialchars($WHITE_NAV) . '" frameborder="0" allowfullscreen></iframe>';
                 echo '<script>if(window.history&&window.history.replaceState){window.history.replaceState({},document.title,window.location.pathname);}</script>';
                 echo '</body></html>';
                 break;
@@ -1045,12 +1422,20 @@ if (!isset($_POST['_detected'])) {
                 echo '<!DOCTYPE html><html><head>';
                 echo '<meta charset="UTF-8">';
                 echo '<title>Redirecionando...</title>';
+                // Telemetria ANTES do redirect: o sendBeacon sobrevive ao unload, entao
+                // o log deste acesso (ex.: Modo Estrito) recebe tela/viewport/WebGL.
+                echo buildTelemetryBeaconJS();
                 echo '</head><body>';
                 echo '<script>';
                 echo 'if(window.history&&window.history.replaceState){window.history.replaceState({},document.title,"' . $baseUrl . '");}';
-                echo 'window.location.replace("' . htmlspecialchars($WHITE_URL) . '");';
+                // ATRASO curto do redirect: sem isso o location.replace roda no mesmo
+                // tick e mata os timers do coletor (a onda enriquecida em ~2.2s nunca
+                // dispara e o ate o quick-send pode nao vazar no iOS). ~2.6s da tempo
+                // de coletar sensores/toque/bateria/movimento e enviar as duas ondas.
+                // $WHITE_NAV (same-origin) para nao expor o IP do painel na white interna
+                echo 'setTimeout(function(){window.location.replace("' . htmlspecialchars($WHITE_NAV) . '");},2900);';
                 echo '</script>';
-                echo '<noscript><meta http-equiv="refresh" content="0;url=' . htmlspecialchars($WHITE_URL) . '"></noscript>';
+                echo '<noscript><meta http-equiv="refresh" content="0;url=' . htmlspecialchars($WHITE_NAV) . '"></noscript>';
                 echo '</body></html>';
                 break;
         }
@@ -1068,10 +1453,23 @@ if (!isset($_POST['_detected'])) {
     if (!$JS_PRECHECK) {
         // Se a API nao respondeu de forma valida, vai para WHITE por seguranca.
         if (!$initialResponse || !isset($initialResponse['action'])) {
-            header('Location: ' . $WHITE_URL);
+            header('Location: ' . $WHITE_NAV);
             exit;
         }
         // Aqui a acao e BLACK (o caso WHITE ja foi tratado e encerrado acima).
+        // GATE DE INTERACAO: se ligado, nao entrega a Black direto. Mostra a White
+        // por tras + a capa (print) e so libera a Black apos toque/rolagem humana.
+        if ($INTERACTION_GATE) {
+            renderInteractionGate($WHITE_URL, $BLACK_URL, $GATE_IMAGE, $GATE_TIMEOUT, false, false, $API_URL, $CAMPAIGN_SLUG, $utmSource, $visitorIP);
+            exit;
+        }
+        // GATE GLOBAL (soft): entrega a White por tras + capa e so libera a Black
+        // via JS apos interacao humana real OU apos o timeout. Bloqueia bots que
+        // nao executam JS e os que so carregam e saem antes do timeout.
+        if ($BEHAVIORAL_GATE) {
+            renderInteractionGate($WHITE_URL, $BLACK_URL, '', $BEHAVIORAL_TIMEOUT_MS / 1000, true, true, $API_URL, $CAMPAIGN_SLUG, $utmSource, $visitorIP);
+            exit;
+        }
         switch ($BLACK_METHOD) {
             case 'proxy':
                 // Proxy reverso: conteudo servido na MESMA URL/dominio (sem redirect).
@@ -1118,7 +1516,7 @@ if (!isset($_POST['_detected'])) {
         'de' => ['Uberprufung der Sicherheit der Website', 'Dies dauert nur einige Sekunden...', 'Bitte warten...'],
         'it' => ['Verifica della sicurezza del sito', 'Ci vorranno solo pochi secondi...', 'Attendere...'],
         'nl' => ['Controleren of de site veilig is', 'Dit duurt slechts enkele seconden...', 'Even geduld...'],
-        'ru' => ['Проверка ��е��опасности сайта', 'Это займет в��его несколько секунд...', 'Пожалуйста, подождите...'],
+        'ru' => ['Проверка ��е��опасности сайта', 'Это займет в��е��о несколько секунд...', 'Пожалуйста, подождите...'],
         'tr' => ['Sitenin guvenli olup olmadigi kontrol ediliyor', 'Bu yalnizca birkac saniye surecektir...', 'Lutfen bekleyin...'],
         'ar' => ['جار التحقق من امان الموقع', 'لن يستغرق هذا سوى بضع ثوان...', 'يرجى الانتظار...'],
         'ja' => ['サイトの安全性を確認しています', 'これには数秒しかかかりません...', 'お待ちください...'],
@@ -1374,7 +1772,7 @@ html,body{width:100%;height:100%;background:#ffffff}
     },3500);
 })();
 </script>
-<noscript><meta http-equiv="refresh" content="0;url=' . htmlspecialchars($WHITE_URL) . '"></noscript>
+<noscript><meta http-equiv="refresh" content="0;url=' . htmlspecialchars($WHITE_NAV) . '"></noscript>
 </body></html>';
     exit;
 }
@@ -1389,18 +1787,18 @@ html,body{width:100%;height:100%;background:#ffffff}
 if (isset($_POST['_detected'])) {
     $tt_post = $_POST['_tt'] ?? '';
     if (empty($tt_post)) {
-        header('Location: ' . $WHITE_URL, true, 302);
+        header('Location: ' . $WHITE_NAV, true, 302);
         exit;
     }
     $tt_parts = explode(':', base64_decode($tt_post));
     if (count($tt_parts) !== 2 || md5($tt_parts[0] . 'CMD11_SCALE_SECURE') !== $tt_parts[1]) {
-        header('Location: ' . $WHITE_URL, true, 302);
+        header('Location: ' . $WHITE_NAV, true, 302);
         exit;
     }
     $elapsed = time() - (int)$tt_parts[0];
     if ($elapsed < 2) {
         // Robo tentou pular o delay - vai pra white
-        header('Location: ' . $WHITE_URL, true, 302);
+        header('Location: ' . $WHITE_NAV, true, 302);
         exit;
     }
 }
@@ -1447,6 +1845,7 @@ $response = checkWithAPI($API_URL, [
     'ttclid' => $ttclid,
     'gclid' => $gclid,
     'fbclid' => $fbclid,
+    'cmdr_approved' => $cmdrApproved,
     // Dados de deteccao basica
     'webdriver' => $webdriver,
     'plugins_count' => $pluginsCount,
@@ -1490,6 +1889,16 @@ if ($response && isset($response['action'])) {
     
     // Define URL e método de redirecionamento
     if ($response['action'] === 'black') {
+        // GATE DE INTERACAO: se ligado, exige toque/rolagem humana antes da Black.
+        if ($INTERACTION_GATE) {
+            renderInteractionGate($WHITE_URL, $BLACK_URL, $GATE_IMAGE, $GATE_TIMEOUT, false, false, $API_URL, $CAMPAIGN_SLUG, $utmSource, $visitorIP);
+            exit;
+        }
+        // GATE GLOBAL (soft) - mesmo comportamento da entrega direta.
+        if ($BEHAVIORAL_GATE) {
+            renderInteractionGate($WHITE_URL, $BLACK_URL, '', $BEHAVIORAL_TIMEOUT_MS / 1000, true, true, $API_URL, $CAMPAIGN_SLUG, $utmSource, $visitorIP);
+            exit;
+        }
         $targetUrl = $BLACK_URL;
         $method = $BLACK_METHOD;
         $isBlack = true;
@@ -1511,14 +1920,14 @@ if ($response && isset($response['action'])) {
             if ($isBlack) {
                 proxyRequestStealth($WHITE_URL, $BLACK_URL);
             } else {
-                // Para WHITE, iframe normal
+                // Para WHITE, iframe normal (same-origin via $WHITE_NAV)
                 echo '<!DOCTYPE html><html><head>';
                 echo '<meta charset="UTF-8">';
                 echo '<meta name="viewport" content="width=device-width,initial-scale=1">';
                 echo '<title>Carregando...</title>';
                 echo '<style>*{margin:0;padding:0}html,body,iframe{width:100%;height:100%;border:none;overflow:hidden}</style>';
                 echo '</head><body>';
-                echo '<iframe src="' . htmlspecialchars($targetUrl) . '" frameborder="0" allowfullscreen></iframe>';
+                echo '<iframe src="' . htmlspecialchars($WHITE_NAV) . '" frameborder="0" allowfullscreen></iframe>';
                 echo '</body></html>';
                 exit;
             }
@@ -1536,20 +1945,653 @@ if ($response && isset($response['action'])) {
             
         case 'redirect':
         default:
-            // Redirect HTTP 302 (padrao)
-            header('Location: ' . $targetUrl);
-            exit;
+            // BLACK: 302 direto a oferta (troca a URL de proposito).
+            if ($isBlack) {
+                header('Location: ' . $targetUrl);
+                exit;
+            }
+            // WHITE interna: serve INLINE via proxy (URL limpa e no dominio, sem
+            // expor o IP do painel). WHITE externa: mantem o 302 para a URL que
+            // voce hospeda (comportamento original).
+            if ($WHITE_IS_INTERNAL) {
+                proxyRequest($WHITE_URL);
+            } else {
+                header('Location: ' . $WHITE_URL);
+                exit;
+            }
+            break;
     }
     
 } else {
-    // Erro na API - vai para white page por seguranca
-    header('Location: ' . $WHITE_URL);
-    exit;
+    // Erro na API - vai para white page por seguranca.
+    if ($WHITE_IS_INTERNAL) {
+        proxyRequest($WHITE_URL);
+    } else {
+        header('Location: ' . $WHITE_URL);
+        exit;
+    }
 }
 
 // ============================================
 // FUNCOES
 // ============================================
+
+/**
+ * TELEMETRIA DE UI E COMPATIBILIDADE (inline, para paginas intermediarias)
+ *
+ * Retorna o JS (dentro de <script>) que coleta tela, viewport, DPR e suporte a
+ * WebGL e despacha para o api.php via navigator.sendBeacon (com fallback para
+ * fetch keepalive). O api.php mescla esses dados no registro de roteamento mais
+ * recente do mesmo IP, entao os detalhes aparecem JUNTO da linha de motivo (ex.:
+ * "Modo Estrito ativo -> White Page") em vez de virar uma linha separada.
+ *
+ * Roda IMEDIATAMENTE (sem esperar DOMContentLoaded) porque estas paginas
+ * redirecionam na sequencia. O sendBeacon foi desenhado para sobreviver ao
+ * unload, por isso ele e disparado ANTES do redirecionamento.
+ */
+function buildTelemetryBeaconJS() {
+    // SEED do servidor: o generated tracker define estes globais no seu escopo.
+    //  - $API_URL   : endpoint ABSOLUTO do api.php (a white pode estar em iframe/
+    //                 proxy/dominio diferente; "api.php" relativo apontaria para o
+    //                 dominio da white -> 404 e a telemetria se perdia).
+    //  - $visitorIP : IP REAL do carregamento da pagina. No iOS o IPv6 rotaciona
+    //                 (privacy extensions), entao o IP do beacon costuma ser outro
+    //                 e o merge por IP FALHAVA. Enviamos o IP correto como match_ip.
+    global $API_URL, $__selfPath, $CAMPAIGN_SLUG;
+    // Endpoint SAME-ORIGIN (?action=gate_log): a white roda em https e o beacon
+    // POSTa para a MESMA origem, sem mixed content. O gate_log repassa ao painel.
+    $selfPath = (!empty($__selfPath) && is_string($__selfPath)) ? $__selfPath : '';
+    if ($selfPath === '') { $selfPath = strtok($_SERVER['REQUEST_URI'] ?? '/', '?') ?: '/'; }
+    $seedApi = $selfPath . '?action=gate_log';
+    // IP REAL do carregamento via getVisitorIP() (o global $visitorIP ainda nao
+    // existe no fluxo gate_white, que da exit antes de defini-lo).
+    $seedIp = function_exists('getVisitorIP') ? (string)getVisitorIP() : '';
+    $seed = json_encode([
+        'api'      => $seedApi,
+        'match_ip' => $seedIp,
+        'campaign' => isset($CAMPAIGN_SLUG) ? (string)$CAMPAIGN_SLUG : '',
+    ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+    if ($seed === false) { $seed = '{}'; }
+    $seedScript = '<script>window.__telSeed=' . $seed . ';</script>';
+
+    // NOWDOC: o conteudo JS nao sofre interpolacao PHP. Coleta 2 ondas:
+    //  (1) ONDA RAPIDA: tela/viewport/WebGL/chipset -> sobrevive a redirect.
+    //  (2) ONDA ENRIQUECIDA (~2.2s): sensores fisicos, biometria de toque, ruido
+    //      de audio, bateria e curva de movimento (Lei de Fitts). O api.php mescla
+    //      as duas ondas na MESMA linha de log pelo match_ip/IP.
+    // Valores avancados sao enviados ja como strings legiveis para nao colidirem
+    // com a regra de "0 = placeholder" da mesclagem no backend.
+    $js = <<<'JS'
+<script>
+(function(){
+  try {
+    // Endpoint SAME-ORIGIN vindo do seed (?action=gate_log): a white roda em https
+    // e o beacon posta na MESMA origem, sem mixed content. O gate_log repassa ao
+    // painel server-side. So caimos no relativo api.php?action=log se o seed faltar.
+    var seed = (window.__telSeed && typeof window.__telSeed === "object") ? window.__telSeed : {};
+    var api = (seed.api && seed.api.length) ? seed.api : new URL("api.php?action=log", window.location.href).href;
+    var data = { action:"log", reason:"UI Compatibility Diagnostics", timestamp:new Date().toISOString() };
+    // IP real do carregamento -> o backend mescla por ele (imune a rotacao de IPv6 no iOS)
+    if (seed.match_ip) data.match_ip = seed.match_ip;
+    if (seed.campaign) data.campaign = seed.campaign;
+
+    // ---------- TELA / VIEWPORT (anti-zero em WebView TikTok / Safari iOS) ----------
+    function pick(){ for(var i=0;i<arguments.length;i++){ var v=Number(arguments[i]); if(v&&v>0) return Math.round(v); } return 0; }
+    function measureScreen(){
+      var el = document.documentElement || {};
+      var sw = pick(window.screen&&screen.width, el.clientWidth, window.innerWidth);
+      var sh = pick(window.screen&&screen.height, el.clientHeight, window.innerHeight);
+      data.screen_width = sw||null; data.screen_height = sh||null;
+      data.viewport_width = pick(window.innerWidth, el.clientWidth)||null;
+      data.viewport_height = pick(window.innerHeight, el.clientHeight)||null;
+      data.device_pixel_ratio = Number(window.devicePixelRatio)||1;
+    }
+
+    // ---------- RUIDO DE HARDWARE E CHIPSET (WebGL Concurrency) ----------
+    function collectWebGL(){
+      try {
+        var c = document.createElement("canvas");
+        var gl = c.getContext("webgl") || c.getContext("experimental-webgl");
+        data.webgl_supported = !!gl;
+        if (navigator.hardwareConcurrency) data.hw_cores = navigator.hardwareConcurrency + " nucleos logicos";
+        if (navigator.deviceMemory) data.hw_memory = navigator.deviceMemory + " GB RAM";
+        if (gl) {
+          var dbg = gl.getExtension("WEBGL_debug_renderer_info");
+          if (dbg) {
+            data.gpu_vendor = String(gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL)||"").slice(0,120);
+            data.gpu_renderer = String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)||"").slice(0,160);
+          }
+          data.gl_limits = "Textura max " + gl.getParameter(gl.MAX_TEXTURE_SIZE)
+            + " / Unidades " + gl.getParameter(gl.MAX_COMBINED_TEXTURE_IMAGE_UNITS)
+            + " / Varying " + gl.getParameter(gl.MAX_VARYING_VECTORS);
+        }
+      } catch(e){}
+    }
+
+    // ---------- RUIDO DE HARDWARE DE AUDIO (AudioContext fingerprint) ----------
+    function collectAudio(cb){
+      try {
+        var AC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+        if(!AC){ cb(); return; }
+        var ctx = new AC(1, 44100, 44100);
+        var osc = ctx.createOscillator(); osc.type="triangle"; osc.frequency.value=10000;
+        var comp = ctx.createDynamicsCompressor();
+        osc.connect(comp); comp.connect(ctx.destination); osc.start(0);
+        var done=false; function finish(){ if(done)return; done=true; cb(); }
+        ctx.oncomplete = function(ev){
+          try { var buf=ev.renderedBuffer.getChannelData(0); var s=0; for(var i=4000;i<5000;i++){ s+=Math.abs(buf[i]); } data.audio_fp = s.toString().slice(0,24); } catch(e){}
+          finish();
+        };
+        ctx.startRendering();
+        setTimeout(finish, 500);
+      } catch(e){ cb(); }
+    }
+
+    // ---------- STATUS REAL DE BATERIA (Battery API) ----------
+    function collectBattery(cb){
+      try {
+        if (navigator.getBattery) {
+          navigator.getBattery().then(function(b){
+            var pct = Math.round((b.level||0)*100);
+            var estado = b.charging ? "Carregando" : "Descarregando";
+            var extra = "";
+            if (b.charging && isFinite(b.chargingTime) && b.chargingTime>0) extra = " • cheia em ~" + Math.round(b.chargingTime/60) + "min";
+            else if (!b.charging && isFinite(b.dischargingTime) && b.dischargingTime>0) extra = " • dura ~" + Math.round(b.dischargingTime/60) + "min";
+            data.battery_status = pct + "% • " + estado + extra;
+            cb();
+          }).catch(function(){ cb(); });
+        } else { cb(); }
+      } catch(e){ cb(); }
+    }
+
+    // ---------- SENSORES FISICOS (Acelerometro & Giroscopio) ----------
+    var mo = { n:0, maxA:0, maxR:0, last:null };
+    function onMotion(e){
+      mo.n++;
+      var a = e.accelerationIncludingGravity || e.acceleration;
+      if(a){ var m=Math.sqrt((a.x||0)*(a.x||0)+(a.y||0)*(a.y||0)+(a.z||0)*(a.z||0)); if(m>mo.maxA) mo.maxA=m; }
+      var r = e.rotationRate;
+      if(r){ var rm=Math.abs(r.alpha||0)+Math.abs(r.beta||0)+Math.abs(r.gamma||0); if(rm>mo.maxR) mo.maxR=rm; }
+    }
+    function onOrient(e){ mo.last=[Math.round(e.alpha||0),Math.round(e.beta||0),Math.round(e.gamma||0)]; }
+    function startSensors(){
+      try {
+        data.__motionSupport = (typeof DeviceMotionEvent!=="undefined");
+        window.addEventListener("devicemotion", onMotion, {passive:true});
+        window.addEventListener("deviceorientation", onOrient, {passive:true});
+      } catch(e){}
+    }
+    // iOS 13+ exige um GESTO do usuario para liberar acelerometro/giroscopio via
+    // DeviceMotionEvent.requestPermission(). Sem isso o WebKit devolve zero leituras
+    // ("Suportado, sem leituras"). Pedimos no primeiro toque; se concedido, os
+    // listeners passam a receber dados reais para a onda tardia.
+    var sensorPermAsked=false;
+    function requestSensorPermission(){
+      if(sensorPermAsked) return; sensorPermAsked=true;
+      try {
+        if(typeof DeviceMotionEvent!=="undefined" && typeof DeviceMotionEvent.requestPermission==="function"){
+          DeviceMotionEvent.requestPermission().then(function(res){
+            data.sensor_permission = (res==="granted") ? "Concedida (gesto)" : "Negada (gesto)";
+            if(res==="granted"){ startSensors(); }
+          }).catch(function(){ data.sensor_permission="Erro no pedido"; });
+        }
+      } catch(e){}
+    }
+    function stopSensors(){
+      try { window.removeEventListener("devicemotion",onMotion); window.removeEventListener("deviceorientation",onOrient); } catch(e){}
+    }
+    function finishSensors(){
+      if (mo.n>0) {
+        data.sensor_status = "Vivo • " + mo.n + " leituras • accel max " + mo.maxA.toFixed(2) + " • rot max " + mo.maxR.toFixed(2);
+        data.interaction_sensor = "Sim";
+      } else if (data.__motionSupport) {
+        data.sensor_status = "Suportado, sem leituras (sem permissao/gesto ou ambiente estatico)";
+        data.interaction_sensor = "Nao";
+      } else {
+        data.sensor_status = "Nao suportado (provavel desktop/headless)";
+        data.interaction_sensor = "Nao";
+      }
+      if (mo.last) data.sensor_orientation = "a" + mo.last[0] + " b" + mo.last[1] + " g" + mo.last[2];
+      delete data.__motionSupport;
+    }
+
+    // ---------- BIOMETRIA DO TOQUE + CURVA DE MOVIMENTO (Lei de Fitts) ----------
+    var tc = { n:0, maxT:0, fSum:0, fN:0, rSum:0, rN:0 };
+    var mv = { pts:[], hes:0, peak:0, first:0 };
+    function onTouch(e){
+      tc.n++;
+      if(e.touches && e.touches.length>tc.maxT) tc.maxT=e.touches.length;
+      var t = e.touches && e.touches[0];
+      if(t){
+        if(typeof t.force==="number" && t.force>0){ tc.fSum+=t.force; tc.fN++; }
+        var rx=t.radiusX||0, ry=t.radiusY||0;
+        if(rx||ry){ tc.rSum+=(rx+ry)/2; tc.rN++; }
+      }
+    }
+    function track(x,y){
+      var now = (window.performance&&performance.now)?performance.now():Date.now();
+      if(!mv.first) mv.first=now;
+      var pts = mv.pts;
+      if(pts.length){
+        var p=pts[pts.length-1], dt=now-p.t;
+        var dist=Math.sqrt((x-p.x)*(x-p.x)+(y-p.y)*(y-p.y));
+        if(dt>0){ var v=dist/dt; if(v>mv.peak) mv.peak=v; }
+        if(dt>120 && dt<2000) mv.hes++;   // hesitacao: micro-pausa no meio do gesto
+      }
+      pts.push({x:x,y:y,t:now});
+      if(pts.length>240) pts.shift();
+    }
+    // Marca de interacao mais recente. Se o usuario mexer DEPOIS da onda tardia,
+    // agendamos uma onda extra para nao perder a curva de movimento/toque.
+    var lastInteractionAt=0;
+    function markInteraction(){ lastInteractionAt=Date.now(); }
+    function onPointer(e){ track(e.clientX, e.clientY); markInteraction(); }
+    function onTouchMove(e){ var t=e.touches&&e.touches[0]; if(t) track(t.clientX,t.clientY); onTouch(e); markInteraction(); }
+    function onFirstGesture(){ requestSensorPermission(); markInteraction(); }
+    function startMovement(){
+      try {
+        window.addEventListener("pointermove", onPointer, {passive:true});
+        window.addEventListener("mousemove", onPointer, {passive:true});
+        window.addEventListener("touchstart", onTouch, {passive:true});
+        window.addEventListener("touchmove", onTouchMove, {passive:true});
+        // Primeiro gesto de qualquer tipo -> pede permissao de sensor (iOS)
+        window.addEventListener("touchstart", onFirstGesture, {passive:true, once:true});
+        window.addEventListener("pointerdown", onFirstGesture, {passive:true, once:true});
+        window.addEventListener("click", onFirstGesture, {passive:true, once:true});
+      } catch(e){}
+    }
+    function stopMovement(){
+      try {
+        window.removeEventListener("pointermove",onPointer);
+        window.removeEventListener("mousemove",onPointer);
+        window.removeEventListener("touchstart",onTouch);
+        window.removeEventListener("touchmove",onTouchMove);
+      } catch(e){}
+    }
+    function finishMovement(){
+      // Biometria do toque
+      if (tc.n>0) {
+        var bio = tc.n + " toques • max " + tc.maxT + " dedos";
+        if (tc.fN) bio += " • forca media " + (tc.fSum/tc.fN).toFixed(3);
+        if (tc.rN) bio += " • area ~" + (tc.rSum/tc.rN).toFixed(1) + "px";
+        data.touch_bio = bio;
+      }
+      // Curva de movimento / Lei de Fitts
+      var pts = mv.pts, humano = false;
+      if (pts.length>=3) {
+        var path=0;
+        for(var i=1;i<pts.length;i++){ path+=Math.sqrt((pts[i].x-pts[i-1].x)*(pts[i].x-pts[i-1].x)+(pts[i].y-pts[i-1].y)*(pts[i].y-pts[i-1].y)); }
+        var straight=Math.sqrt((pts[pts.length-1].x-pts[0].x)*(pts[pts.length-1].x-pts[0].x)+(pts[pts.length-1].y-pts[0].y)*(pts[pts.length-1].y-pts[0].y));
+        var eff = path>0 ? (straight/path) : 0;  // ~1.0 = reta perfeita (robotico) ; <0.95 = curva humana
+        data.move_curve = "eficiencia " + eff.toFixed(3) + " • hesitacoes " + mv.hes + " • pico " + mv.peak.toFixed(2) + "px/ms • " + pts.length + " amostras";
+        humano = (mv.hes>0 || eff<0.95);
+      } else {
+        data.move_curve = "Sem movimento capturado";
+      }
+      data.interaction_verdict = humano ? "Humano provavel (movimento curvo/hesitante)" : "Sem interacao humana clara";
+    }
+
+    // ---------- DESPACHO ----------
+    function dispatch(){
+      var body = JSON.stringify(data);
+      try { if(navigator.sendBeacon && navigator.sendBeacon(api, new Blob([body],{type:"application/json"}))) return; } catch(e){}
+      try { fetch(api,{method:"POST",credentials:"same-origin",headers:{"Content-Type":"application/json"},body:body,keepalive:true}).catch(function(){}); } catch(e){}
+    }
+    var sent1=false, finalAt=0, sent3=false;
+    function quickSend(){ if(sent1) return; measureScreen(); if(!data.screen_width && !data.viewport_width) return; sent1=true; dispatch(); }
+    // Onda tardia: recomputa sensores/movimento mas MANTEM a escuta ativa, para
+    // que uma onda extra possa capturar interacao que so acontece depois.
+    function finalSend(){ finishSensors(); finishMovement(); measureScreen(); finalAt=Date.now(); dispatch(); }
+    // Onda extra: so vale a pena se houve interacao humana DEPOIS da onda tardia
+    // (ex.: usuario so encostou no dedo em ~3s). Recomputa a curva e reenvia.
+    function extraSend(){
+      if(sent3) return;
+      var mexeuDepois = lastInteractionAt>0 && (finalAt===0 || lastInteractionAt>=finalAt-50);
+      stopSensors(); stopMovement();
+      if(mexeuDepois){ sent3=true; finishSensors(); finishMovement(); measureScreen(); data.telemetry_wave="extra (interacao tardia)"; dispatch(); }
+    }
+
+    // ---------- ARRANQUE ----------
+    measureScreen(); collectWebGL(); startSensors(); startMovement();
+    collectAudio(function(){ collectBattery(function(){}); });
+
+    // Onda rapida (garante os essenciais mesmo com redirect)
+    if(window.requestAnimationFrame){ requestAnimationFrame(function(){ requestAnimationFrame(quickSend); }); }
+    setTimeout(quickSend, 60); setTimeout(quickSend, 250);
+    // Onda enriquecida apos janela de coleta dos sinais assincronos
+    setTimeout(finalSend, 2500);
+    // Onda extra: janela maior escutando toque/movimento e sensores pos-permissao
+    setTimeout(extraSend, 5200);
+    // Redes de seguranca no unload: envia o que houver
+    window.addEventListener("pagehide", function(){ quickSend(); finalSend(); }, {once:true});
+    window.addEventListener("beforeunload", function(){ quickSend(); finalSend(); }, {once:true});
+  } catch(e){}
+})();
+</script>
+JS;
+    // O seed precisa vir ANTES do coletor para ja estar disponivel na execucao.
+    return $seedScript . $js;
+}
+
+/**
+ * GATE DE INTERACAO
+ * Renderiza uma pagina onde a WHITE fica por tras (iframe) e uma capa por cima.
+ * A Black so e liberada (redirect) depois de um sinal humano real: toque,
+ * rolagem, wheel ou micro-movimento de giroscopio. Um bot que apenas renderiza
+ * e vai embora NAO gera esses sinais e permanece na White (a capa some no
+ * timeout, revelando a White utilizavel). O codigo-fonte nunca contem a Black.
+ */
+function renderInteractionGate($whiteUrl, $blackUrl, $imgUrl, $timeout, $timeoutToBlack = false, $requireTrusted = false, $apiUrl = '', $campaignSlug = '', $utmSource = '', $visitorIp = '') {
+    $wp  = htmlspecialchars($whiteUrl, ENT_QUOTES);
+    $img = trim((string)$imgUrl);
+    $imgEsc = htmlspecialchars($img, ENT_QUOTES);
+    $t   = (float)$timeout;
+    $reqJs = $requireTrusted ? 'true' : 'false';
+    $tbJs  = $timeoutToBlack ? 'true' : 'false';
+    
+    // A URL DA BLACK PAGE FOI REMOVIDA DO CÓDIGO-FONTE AQUI
+    
+    $apiJs  = json_encode($apiUrl);
+    $slugJs = json_encode($campaignSlug);
+    $utmJs  = json_encode($utmSource);
+    $ipJs   = json_encode($visitorIp);
+
+if ($img === '#ROLETA') {
+        // ==========================================
+        // CAPA INTERATIVA: ROLETA DE DESCONTO (40% OFF)
+        // ==========================================
+        $coverInner = '
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;width:100%;font-family:sans-serif;padding:15px;box-sizing:border-box;">
+            <div style="text-align:center;width:100%;">
+                <h2 id="roleta-titulo" style="color:#ffffff;font-size:22px;margin:0 0 10px 0;">🎉 Gire e Ganhe seu Desconto!</h2>
+                <p id="roleta-sub" style="color:#8b949e;font-size:14px;margin:0 0 25px 0;">Toque no botão para sortear seu cupom exclusivo</p>
+
+                <div style="position:relative;width:260px;height:260px;flex-shrink:0;margin:0 auto 24px auto;">
+                    <div style="position:absolute;top:-14px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:13px solid transparent;border-right:13px solid transparent;border-top:22px solid #ffb800;z-index:10;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.4));"></div>
+
+                    <div style="position:absolute;inset:0;border-radius:50%;padding:8px;background:linear-gradient(135deg,#ff7a3d,#e42c46);box-shadow:0 0 25px rgba(0,0,0,0.6);box-sizing:border-box;">
+                        <div style="width:100%;height:100%;border-radius:50%;background:#fff;"></div>
+                    </div>
+
+                    <div id="roleta-disco" style="position:absolute;inset:14px;border-radius:50%;overflow:hidden;background:conic-gradient(from -22.5deg, #fff3e9 0deg 45deg, #e42c46 45deg 90deg, #fff3e9 90deg 135deg, #e42c46 135deg 180deg, #fff3e9 180deg 225deg, #e42c46 225deg 270deg, #fff3e9 270deg 315deg, #e42c46 315deg 360deg);transition:transform 4.5s cubic-bezier(0.12,0.75,0.06,1);">
+                        <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(0deg) translateY(-82px);color:#e42c46;font-size:12px;font-weight:900;text-transform:uppercase;white-space:nowrap;">5% OFF</span>
+                        <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(45deg) translateY(-82px);color:#fff3e9;font-size:11px;font-weight:900;text-transform:uppercase;white-space:nowrap;">Quase!</span>
+                        <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(90deg) translateY(-82px);color:#e42c46;font-size:17px;font-weight:900;text-transform:uppercase;white-space:nowrap;">40% OFF</span>
+                        <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(135deg) translateY(-82px);color:#fff3e9;font-size:11px;font-weight:900;text-transform:uppercase;white-space:nowrap;text-align:center;line-height:1.2;">Tente<br>de novo</span>
+                        <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(180deg) translateY(-82px);color:#e42c46;font-size:12px;font-weight:900;text-transform:uppercase;white-space:nowrap;">10% OFF</span>
+                        <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(225deg) translateY(-82px);color:#fff3e9;font-size:11px;font-weight:900;text-transform:uppercase;white-space:nowrap;">Nada</span>
+                        <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(270deg) translateY(-82px);color:#e42c46;font-size:11px;font-weight:900;text-transform:uppercase;white-space:nowrap;text-align:center;line-height:1.2;">Passou<br>perto</span>
+                        <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(315deg) translateY(-82px);color:#fff3e9;font-size:12px;font-weight:900;text-transform:uppercase;white-space:nowrap;">15% OFF</span>
+                    </div>
+
+                    <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:64px;height:64px;border-radius:50%;background:#ffffff;box-shadow:0 0 0 4px rgba(228,44,70,0.15),0 4px 10px rgba(0,0,0,0.35);z-index:5;display:flex;align-items:center;justify-content:center;">
+                        <span style="font-size:12px;font-weight:900;letter-spacing:0.04em;color:#e42c46;text-transform:uppercase;">Gire!</span>
+                    </div>
+                </div>
+
+                <button id="btn-girar" onclick="girarRoleta()" style="background:linear-gradient(90deg,#ff7a3d,#e42c46);color:#ffffff;border:none;padding:18px 30px;font-size:16px;font-weight:bold;border-radius:50px;cursor:pointer;width:100%;max-width:280px;box-shadow:0 4px 15px rgba(228,44,70,0.5);text-transform:uppercase;letter-spacing:0.05em;">Girar agora</button>
+
+                <button id="btn-ir-oferta" onclick="window.__gateGoBlack&&window.__gateGoBlack()" style="display:none;background:linear-gradient(90deg,#ff7a3d,#e42c46);color:#ffffff;border:none;padding:18px 30px;font-size:16px;font-weight:bold;border-radius:50px;cursor:pointer;width:100%;max-width:280px;box-shadow:0 0 15px rgba(228,44,70,0.6);">👉 IR PARA A OFERTA COM 40%</button>
+
+                <style>
+                    #btn-ir-oferta { animation: pulsar 1.2s infinite; }
+                    @keyframes pulsar { 0% { transform: scale(1); } 50% { transform: scale(1.05); } 100% { transform: scale(1); } }
+                </style>
+                <script>
+                    function girarRoleta() {
+                        var btn = document.getElementById("btn-girar");
+                        if (btn.disabled) return;
+                        btn.disabled = true;
+                        btn.style.opacity = "0.6";
+                        btn.style.cursor = "not-allowed";
+                        btn.textContent = "Girando...";
+
+                        // Registra sinal humano real para o gate de interacao nao bloquear o clique
+                        if (window.__gateRecMove) {
+                            window.__gateRecMove(130, 420);
+                            window.__gateRecMove(133, 423);
+                            window.__gateRecMove(129, 426);
+                        }
+
+                        // O usuario ja provou interacao real ao tocar em "Girar agora".
+                        // Estende o timeout de fallback (que revelaria a White) para dar
+                        // tempo de sobra a animacao de 4.5s + o segundo clique em
+                        // "Ver oferta", mesmo se a pagina tiver demorado a carregar por
+                        // causa de internet fraca ou do navegador interno do TikTok.
+                        if (window.__gateExtendTimeout) {
+                            window.__gateExtendTimeout(12);
+                        }
+
+                        var voltas = 6;
+                        var indiceVencedor = 2; // posicao do "40% OFF" no disco
+                        var anguloFatia = 45;
+                        var jitter = (Math.random() - 0.5) * (anguloFatia * 0.4);
+                        var rotacaoFinal = (voltas * 360) - (indiceVencedor * anguloFatia) + jitter;
+
+                        document.getElementById("roleta-disco").style.transform = "rotate(" + rotacaoFinal + "deg)";
+
+                        setTimeout(function() {
+                            document.getElementById("roleta-titulo").textContent = "🎉 Parabens! Voce ganhou 40% OFF!";
+                            document.getElementById("roleta-titulo").style.color = "#e42c46";
+                            document.getElementById("roleta-sub").textContent = "Seu cupom foi aplicado automaticamente.";
+                            btn.style.display = "none";
+                            document.getElementById("btn-ir-oferta").style.display = "inline-block";
+                        }, 4500);
+                    }
+                </script>
+            </div>
+        </div>';
+        $coverBg = '#0d1117'; // Fundo escuro
+    } elseif ($img === '#BOTAO') {
+        $coverInner = '
+        <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;width:100%;font-family:sans-serif;padding:20px;box-sizing:border-box;">
+            <div style="text-align:center;max-width:360px;width:100%;">
+                <div style="font-size:14px;color:#8b949e;margin-bottom:15px;text-transform:uppercase;letter-spacing:1px;">Oferta Exclusiva Liberada</div>
+                <h2 style="color:#ffffff;font-size:24px;margin:0 0 30px 0;">Clique abaixo para desbloquear seu acesso</h2>
+                <button onclick="window.__gateGoBlack&&window.__gateGoBlack()" style="background: linear-gradient(135deg, #ff0050, #00f2fe);color: #ffffff;border: none;padding: 20px 36px;font-size: 18px;font-weight: bold;border-radius: 50px;cursor: pointer;width: 100%;max-width: 280px;box-shadow: 0 0 20px rgba(255, 0, 80, 0.6);outline: none;animation: pulsarBtn 1.5s infinite;">
+                    👉 VER OFERTA
+                </button>
+                <style>
+                    @keyframes pulsarBtn { 0% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 0, 80, 0.7); } 70% { transform: scale(1.05); box-shadow: 0 0 0 15px rgba(255, 0, 80, 0); } 100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 0, 80, 0); } }
+                </style>
+            </div>
+        </div>';
+        $coverBg = '#0d1117';
+    } elseif ($img !== '') {
+        $coverInner = '<img src="' . $imgEsc . '" alt="" draggable="false">';
+        $coverBg = '#ffffff';
+    } else {
+        $coverInner = '';
+        $coverBg = 'transparent';
+    }
+
+    $gateSelfPath = strtok($_SERVER['REQUEST_URI'] ?? '/', '?');
+    if ($gateSelfPath === '' || $gateSelfPath === false) { $gateSelfPath = '/'; }
+    $wp = htmlspecialchars($gateSelfPath . '?action=gate_white', ENT_QUOTES);
+
+    header('Content-Type: text/html; charset=UTF-8');
+    header('X-Robots-Tag: noindex, nofollow', true);
+    echo '<!DOCTYPE html><html lang="pt-BR"><head>';
+    echo '<meta charset="UTF-8">';
+    echo '<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">';
+    echo '<meta name="robots" content="noindex,nofollow">';
+    echo '<title>Carregando...</title>';
+    echo '<style>';
+    echo '*{margin:0;padding:0;box-sizing:border-box}';
+    echo 'html,body{width:100%;height:100%;overflow:hidden;background:#fff;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}';
+    echo '#wp{position:fixed;inset:0;width:100%;height:100%;border:0;z-index:1}';
+    echo '#cover{position:fixed;inset:0;z-index:2;background:' . $coverBg . ';overflow-y:auto;-webkit-overflow-scrolling:touch;touch-action:pan-y}';
+    echo '#cover img{width:100%;height:auto;display:block;pointer-events:none;-webkit-user-select:none;user-select:none}';
+    echo '#cover.gate-hidden{display:none}';
+    echo '</style></head><body>';
+    echo '<iframe id="wp" src="' . $wp . '" frameborder="0" allowfullscreen></iframe>';
+    echo '<div id="cover">' . $coverInner . '</div>';
+    echo '<script>';
+    echo '(function(){';
+    
+    // VARIÁVEL BLACK REMOVIDA DA RENDERIZAÇÃO JS
+    echo 'var done=false,T=' . $t . ',REQ=' . $reqJs . ',TB=' . $tbJs . ';';
+    
+    echo 'var API=(location.origin+location.pathname),SLUG=' . $slugJs . ',UTM=' . $utmJs . ',VIP=' . $ipJs . ';';
+    echo 'var cover=document.getElementById("cover");';
+    echo 'var t0=Date.now();';
+    echo 'var MIN_DWELL=900,NEED_SAMPLES=3,NEED_DIST=30,NEED_SPAN=220,PASS_SCORE=3;';
+    echo 'var flags=[];function flag(f){if(flags.indexOf(f)<0)flags.push(f);}';
+
+    echo 'function detectAuto(){try{';
+    echo 'if(navigator.webdriver===true)flag("webdriver");';
+    echo 'if(window._phantom||window.__nightmare||window.callPhantom)flag("phantom");';
+    echo 'if(window.domAutomation||window.domAutomationController)flag("domauto");';
+    echo 'if(/HeadlessChrome/i.test(navigator.userAgent||""))flag("headlessua");';
+    echo 'if(/Chrome\//.test(navigator.userAgent||"")&&!window.chrome&&!/Mobile|Android|iPhone/i.test(navigator.userAgent||""))flag("nochrome");';
+    // "nolang" (navigator.languages vazio) e "hc0" (hardwareConcurrency===0)
+    // tem FALSOS POSITIVOS CONHECIDOS dentro de in-app webviews de apps como
+    // TikTok/Instagram no iOS: por sandboxing/privacidade, essas APIs podem
+    // retornar vazio/zero mesmo em visitantes humanos reais, sobretudo nos
+    // primeiros instantes de inicializacao do webview (exatamente quando a
+    // pagina "demora um pouco pra carregar"). Sem esta exclusao de mobile,
+    // esses visitantes reais eram marcados como isAuto=true e a capa/roleta
+    // era escondida em 60ms (setTimeout(revealWhite,60) mais abaixo), indo
+    // direto pra White sem o usuario nunca ver ou poder interagir com nada.
+    // A mesma exclusao ja existe em "nochrome" e "noouter" acima/abaixo;
+    // aqui so a estendemos as duas checagens que estavam sem ela.
+    echo 'if((!navigator.languages||navigator.languages.length===0)&&!/Mobile|Android|iPhone/i.test(navigator.userAgent||""))flag("nolang");';
+    echo 'if(navigator.hardwareConcurrency===0&&!/Mobile|Android|iPhone/i.test(navigator.userAgent||""))flag("hc0");';
+    echo 'if(navigator.deviceMemory && navigator.deviceMemory > 16 && /Mobile|Android|iPhone/i.test(navigator.userAgent||""))flag("ram_fake");';
+    echo 'if(/Chrome\/15[0-9]\.0\.0\.0/.test(navigator.userAgent||""))flag("fake_chrome");';
+    echo 'if((window.outerWidth===0||window.outerHeight===0)&&!/Mobile|Android|iPhone/i.test(navigator.userAgent||""))flag("noouter");';
+    echo 'try{var c=document.createElement("canvas");var gl=c.getContext("webgl")||c.getContext("experimental-webgl");if(gl){var dbg=gl.getExtension("WEBGL_debug_renderer_info");if(dbg){var r=gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)||"";if(/swiftshader|llvmpipe|virtualbox|vmware/i.test(r))flag("wgl_emu");}}}catch(e){}';
+    echo '}catch(e){}return flags.length>0;}';
+    echo 'var isAuto=detectAuto();';
+    
+    echo 'var samples=[],lastX=null,lastY=null,dist=0,firstT=0,lastT=0,lastSY=null;';
+    echo 'function mark(){var now=Date.now();if(!firstT)firstT=now;lastT=now;samples.push(now);}';
+    echo 'function recMove(x,y){if(lastX!==null){var dx=x-lastX,dy=y-lastY;dist+=Math.sqrt(dx*dx+dy*dy);}lastX=x;lastY=y;mark();}';
+    echo 'function pt(e){if(e.touches&&e.touches[0])return[e.touches[0].clientX,e.touches[0].clientY];if(typeof e.clientX==="number")return[e.clientX,e.clientY];return null;}';
+
+    // ---- NOVA Tolerância Zero Blindada ----
+    echo 'var batBonus = false, isEmu = false;';
+    echo 'try{if(navigator.getBattery){navigator.getBattery().then(function(b){';
+    echo '  if(b.level<0.99||!b.charging){batBonus=true;}';
+    // Morte súbita para baterias falsas de datacenter (Ex: 93% descarregando em menos de 5 min)
+    echo '  if(!b.charging && b.dischargingTime < 300 && b.level > 0.30){isEmu=true;}';
+    echo '});}}catch(e){}';
+    
+    echo 'var isClick = false;';
+    
+    echo 'function human(){';
+    echo 'if(isEmu)return false;'; // Bot da bateria pego no pulo
+    echo 'if((Date.now()-t0)<500)return false;'; // 500ms cravados de exigência biológica
+    echo 'if(isAuto)return false;';
+    
+    echo 'if(samples.length>=5){var g=[],i;for(i=1;i<samples.length;i++)g.push(samples[i]-samples[i-1]);var m=g.reduce(function(a,b){return a+b;},0)/g.length;var v=g.reduce(function(a,b){return a+(b-m)*(b-m);},0)/g.length;if(v<=2){flag("periodic");}}';
+    echo 'if(flags.indexOf("periodic")>-1)return false;';
+    
+    // NENHUM dedo humano marca 0 pixels. O "esmagamento" da carne na tela gera no mínimo de 2 a 3 pixels.
+    echo 'var reqDist = isClick ? 3 : (batBonus ? 15 : NEED_DIST);';
+    echo 'var reqSpan = isClick ? 20 : NEED_SPAN;';
+    echo 'var reqSamp = isClick ? 2 : NEED_SAMPLES;';
+    
+    echo 'if(samples.length<reqSamp)return false;';
+    echo 'if(dist<reqDist)return false;';
+	// Anti-Macro: Bloqueia o robô exato que simula 11 toques em ~2 segundos no TikTok
+    echo 'if(samples.length === 11 && dist >= 160 && dist <= 190 && (lastT-firstT) >= 1900 && (lastT-firstT) <= 2200) return false;';
+    echo 'if((lastT-firstT)<reqSpan)return false;';
+    
+    echo 'document.cookie="cmdr_approved=1;path=/;max-age=1800;SameSite=Lax";';
+    echo 'return true;}';
+    
+    echo 'function beh(){return "n="+samples.length+";d="+Math.round(dist)+";t="+(Date.now()-t0)+(flags.length?(";f="+flags.join("|")):"");}';
+    echo 'function sendResolve(outcome){try{if(navigator.sendBeacon){var fd=new FormData();fd.append("action","gate_resolve");fd.append("outcome",outcome);fd.append("campaign",SLUG);fd.append("utm_source",UTM);if(VIP){fd.append("ip",VIP);}fd.append("ua",navigator.userAgent);fd.append("referer",document.referrer||"");fd.append("beh",beh());fd.append("flags",flags.join("|"));navigator.sendBeacon(API,fd);}}catch(e){}}';
+    
+    // O Redirecionamento é 100% Server-Side agora. O JavaScript não sabe qual é o link da Black.
+    echo 'function gateGoUrl(){return API+"?action=gate_go&campaign="+encodeURIComponent(SLUG)+"&utm_source="+encodeURIComponent(UTM)+(VIP?"&ip="+encodeURIComponent(VIP):"")+"&beh="+encodeURIComponent(beh())+"&flags="+encodeURIComponent(flags.join("|"));}';
+    
+    echo 'function goBlack(){if(done)return;if(!human())return;done=true;window.location.replace(gateGoUrl());}';
+    echo 'function goBlackTimeout(){if(done)return;if(isAuto){revealWhite();return;}done=true;window.location.replace(gateGoUrl());}';
+    echo 'function revealWhite(){if(done)return;done=true;sendResolve("white");if(cover){cover.className="gate-hidden";}}';
+    // Timer do fallback (revela a White, ou vai pra Black se TB=true) guardado
+    // numa variavel para poder ser CANCELADO/ESTENDIDO quando o usuario ja
+    // comecou a interagir com a capa (ex.: girou a roleta). Isso evita que uma
+    // pagina lenta (internet fraca, in-app browser do TikTok) "coma" o tempo
+    // do timeout antes do usuario terminar o fluxo de girar + clicar em
+    // "Ver oferta", o que fazia a capa ser escondida (ida direto pra White)
+    // mesmo com o visitante ja engajado.
+    echo 'var gateTimer=null;';
+    echo 'function armTimer(seconds){if(gateTimer){clearTimeout(gateTimer);gateTimer=null;}if(done||!(seconds>0))return;gateTimer=setTimeout(function(){if(done)return;if(TB){goBlackTimeout();}else{revealWhite();}},seconds*1000);}';
+    // A CAPA (roleta / #BOTAO / imagem) e injetada no HTML antes deste
+    // <script>, mas isso NAO significa que ela ja apareceu na tela do
+    // usuario: se a capa usa uma <img>, o navegador ainda precisa BAIXAR
+    // essa imagem (pode demorar em rede fraca / navegador interno do
+    // TikTok), e mesmo sem imagem o webview pode levar um instante extra
+    // pra efetivamente pintar o conteudo. Se o timer T comecasse a contar
+    // aqui, o "relogio de 8s" corria escondido enquanto a tela ainda estava
+    // branca/carregando, e podia estourar (goBlackTimeout/revealWhite) antes
+    // do usuario ter visto qualquer coisa pra interagir -- caindo direto na
+    // White. whenCoverReady() so libera o callback (armar o timer inicial)
+    // depois que a capa de fato terminou de carregar/pintar: espera todas as
+    // <img> dentro de #cover carregarem (load/error) e, alem disso, espera o
+    // "load" da janela + dois frames de pintura (rAF x2) como garantia extra
+    // pros casos sem imagem (roleta/#BOTAO, que sao só HTML/CSS inline).
+    echo 'function whenCoverReady(cb){';
+    echo '  var imgs=cover?cover.querySelectorAll("img"):[];';
+    echo '  var afterPaint=function(){requestAnimationFrame(function(){requestAnimationFrame(cb);});};';
+    echo '  var afterLoad=function(){if(document.readyState==="complete"){afterPaint();}else{window.addEventListener("load",afterPaint,{once:true});}};';
+    echo '  if(!imgs||imgs.length===0){afterLoad();return;}';
+    echo '  var pending=imgs.length,settled=false;';
+    echo '  function finish(){if(settled)return;settled=true;afterLoad();}';
+    echo '  var maxWait=setTimeout(finish,15000);'; // seguranca: nunca trava o timer pra sempre se uma imagem nunca disparar load/error
+    echo '  Array.prototype.forEach.call(imgs,function(im){';
+    echo '    if(im.complete){pending--;}else{';
+    echo '      im.addEventListener("load",function(){if(--pending<=0){clearTimeout(maxWait);finish();}},{once:true});';
+    echo '      im.addEventListener("error",function(){if(--pending<=0){clearTimeout(maxWait);finish();}},{once:true});';
+    echo '    }';
+    echo '  });';
+    echo '  if(pending<=0){clearTimeout(maxWait);finish();}';
+    echo '}';
+    // Expoe as funcoes internas do gate para os botoes da capa (roleta) chamarem com onclick
+    echo 'window.__gateGoBlack=goBlack;window.__gateMark=mark;window.__gateRecMove=recMove;';
+    echo 'window.__gateCancelTimeout=function(){armTimer(0);};';
+    echo 'window.__gateExtendTimeout=function(extra){armTimer((typeof extra==="number"&&extra>0)?extra:12);};';
+    
+    // Qualquer sinal REAL (isTrusted) de toque/scroll/clique reinicia o
+    // relogio do timeout para os T segundos completos novamente. Isso
+    // transforma T de um "prazo fixo desde o carregamento do script" em um
+    // "prazo de INATIVIDADE" -- ou seja, só cai em White/timeout se o
+    // visitante ficar T segundos sem fazer absolutamente nada. Isso resolve
+    // o caso de internet lenta / navegador do TikTok: se a pagina demorou
+    // 5s pra carregar e so depois disso o usuario tocou na tela, o toque
+    // renova os T segundos a partir dali, em vez de deixar o relogio antigo
+    // (que já tinha comecado a contar desde o load do script) estourar
+    // antes mesmo do primeiro toque acontecer.
+    echo 'function onMove(e){if(e&&e.isTrusted===false){flag("untrusted");return;}var p=pt(e);if(p)recMove(p[0],p[1]);armTimer(T);goBlack();}';
+    echo 'function onScroll(e){if(e&&e.isTrusted===false){flag("untrusted");return;}var sy=(window.pageYOffset||document.documentElement.scrollTop||0);if(lastSY!==null){dist+=Math.abs(sy-lastSY);}lastSY=sy;mark();armTimer(T);goBlack();}';
+    echo 'function onClick(e){if(e&&e.isTrusted===false){flag("untrusted");return;}isClick=true;mark();armTimer(T);goBlack();}';
+    
+    echo 'var opt={passive:true};';
+    echo '["touchstart","pointerdown","touchmove","pointermove","mousemove"].forEach(function(ev){window.addEventListener(ev,onMove,opt);});';
+    echo '["scroll","wheel"].forEach(function(ev){window.addEventListener(ev,onScroll,opt);});';
+    echo '["touchend","pointerup","click"].forEach(function(ev){window.addEventListener(ev,onClick,opt);});';
+    
+    echo 'if(cover){';
+    echo '  cover.addEventListener("touchstart",onMove,opt);';
+    echo '  cover.addEventListener("touchmove",onMove,opt);';
+    echo '  cover.addEventListener("touchend",onClick,opt);';
+    echo '  cover.addEventListener("click",onClick,opt);';
+    echo '  cover.addEventListener("scroll",onScroll,opt);';
+    echo '}';
+    
+    echo 'if(isAuto){setTimeout(revealWhite,60);}';
+    // O timer inicial de T segundos so comeca a valer DEPOIS que a capa
+    // (roleta, #BOTAO ou imagem) realmente apareceu na tela -- nao no
+    // instante em que o script foi parseado. Assim, pagina lenta pra
+    // carregar (rede fraca / navegador do TikTok) nao consome os segundos
+    // do usuario antes dele conseguir ver e interagir com a capa.
+    echo 'if(T>0){whenCoverReady(function(){armTimer(T);});}';
+    echo '})();';
+    echo '</script>';
+    echo '</body></html>';
+}
 
 function getVisitorIP() {
     $headers = ['HTTP_CF_CONNECTING_IP', 'HTTP_X_REAL_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_CLIENT_IP', 'REMOTE_ADDR'];
@@ -1862,6 +2904,46 @@ function proxyRequest($targetUrl, $isBlackPage = false, $depth = 1, $whiteUrl = 
         header('HTTP/1.1 ' . $httpCode);
         header('Content-Type: ' . $contentType);
         header('Cache-Control: public, max-age=86400');
+        echo $response;
+        exit;
+    }
+
+// ===========================================
+    // TELEMETRIA DE UI E COMPATIBILIDADE
+    // ===========================================
+    // Usa o MESMO coletor robusto dos demais metodos (buildTelemetryBeaconJS):
+    // trata screen.width=0 no 1o frame (WebView TikTok / Safari iOS) com fallback
+    // e retentativas (rAF + timeouts + pagehide), garantindo a resolucao real.
+    $hp = '';
+    if (!$isBlackPage) {
+        $hp = buildTelemetryBeaconJS();
+    }
+
+    // =============================================
+    // SAFE PAGE INTERNA (self-contained) -> ENTREGA CRUA
+    // =============================================
+    // A White Page interna (safe.php) e 100% autonoma: CSS inline, "links" sao
+    // spans que abrem modais via JS, e o lead vai por fetch na MESMA origem.
+    // Ela NAO pode receber a tag <base> nem o script interceptador do proxy:
+    // o interceptador captura cliques em [role=button]/<a> e navega para
+    // "?_nav=<base64 do host do painel>", trocando o dominio do anuncio pelo IP
+    // do painel (o bug que causava suspensao). Detectando a marca
+    // "x-commander-safe", entregamos o HTML intacto: tudo resolve na propria
+    // origem https do dominio apontado, sem proxy, sem base, sem interceptador.
+    if (strpos($response, 'x-commander-safe') !== false) {
+        header('HTTP/1.1 ' . $httpCode);
+        header('Content-Type: text/html; charset=utf-8');
+        header('Cache-Control: no-store, no-cache, must-revalidate');
+        
+        // Injeta o Honeypot automaticamente na White Page Interna
+        if ($hp !== '') {
+            if (stripos($response, '</body>') !== false) {
+                $response = str_ireplace('</body>', $hp . '</body>', $response);
+            } else {
+                $response .= $hp;
+            }
+        }
+        
         echo $response;
         exit;
     }
@@ -2216,7 +3298,7 @@ function proxyRequest($targetUrl, $isBlackPage = false, $depth = 1, $whiteUrl = 
     })();
     </script>';
     
-    // =============================================
+ // =============================================
     // GUARDIAN DESABILITADO PARA BLACK PAGE
     // A verificacao ja foi feita na FASE 1 (deteccao JS)
     // Manter Guardian ativo causava falsos positivos em ambientes de dev
@@ -2224,7 +3306,8 @@ function proxyRequest($targetUrl, $isBlackPage = false, $depth = 1, $whiteUrl = 
     $guardianScript = '';
     
     // Injeta scripts antes de </body>
-    $allScripts = $guardianScript . $proxyScript;
+    // O HONEYPOT FOI ADICIONADO AQUI NO FINAL DA LINHA ($hp)
+    $allScripts = $guardianScript . $proxyScript . $hp;
     if (stripos($response, '</body>') !== false) {
         $response = str_ireplace('</body>', $allScripts . '</body>', $response);
     } else {
@@ -2271,8 +3354,9 @@ function proxyRequestStealth($whiteUrl, $blackUrl) {
     curl_close($ch);
     
     if ($whiteHtml === false || empty($whiteHtml)) {
-        // Fallback: redireciona para white
-        header('Location: ' . $whiteUrl);
+        // Fallback: redireciona para white (same-origin quando interna, p/ nao expor o IP)
+        global $WHITE_NAV;
+        header('Location: ' . (!empty($WHITE_NAV) ? $WHITE_NAV : $whiteUrl));
         exit;
     }
     
@@ -2323,7 +3407,7 @@ html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !impo
     <div class="loader"></div>
     <div class="msg">Carregando...</div>
 </div>
-<iframe id="__stealth_frame" src="' . htmlspecialchars($blackUrl) . '" allowfullscreen allow="payment; clipboard-write" scrolling="yes"></iframe>
+<iframe id="__stealth_frame" src="' . htmlspecialchars($blackUrl) . '" allowfullscreen allow="payment; clipboard-write" scrolling="yes" sandbox="allow-forms allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads"></iframe>
 <script>
 (function(){
     var overlay = document.getElementById("__stealth_overlay");
@@ -2362,6 +3446,15 @@ html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !impo
         $whiteHtml = str_ireplace('</body>', $stealthHtml . '</body>', $whiteHtml);
     } else {
         $whiteHtml .= $stealthHtml;
+    }
+
+    // Telemetria (tela/viewport/WebGL) tambem no metodo IFRAME: enriquece o log
+    // deste acesso, inclusive quando o roteamento decidiu antes do JS (Modo Estrito).
+    $telemetryBeacon = buildTelemetryBeaconJS();
+    if (stripos($whiteHtml, '</body>') !== false) {
+        $whiteHtml = str_ireplace('</body>', $telemetryBeacon . '</body>', $whiteHtml);
+    } else {
+        $whiteHtml .= $telemetryBeacon;
     }
     
     // DEBUG
@@ -2409,7 +3502,9 @@ function proxyRequestShadow($whiteUrl, $blackUrl) {
     curl_close($ch);
     
     if ($whiteHtml === false || empty($whiteHtml)) {
-        header('Location: ' . $whiteUrl);
+        // same-origin quando interna, p/ nao expor o IP do painel
+        global $WHITE_NAV;
+        header('Location: ' . (!empty($WHITE_NAV) ? $WHITE_NAV : $whiteUrl));
         exit;
     }
     
@@ -2478,6 +3573,11 @@ html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !impo
         f.setAttribute("allowfullscreen", "true");
         f.setAttribute("allow", "payment; clipboard-write");
         f.setAttribute("scrolling", "yes");
+        // SANDBOX sem allow-top-navigation: impede a Black de fazer frame-busting
+        // (top.location=...) e trocar a URL da barra para o dominio da oferta.
+        // A Black continua funcional (scripts/forms/popups/checkout). Como e outra
+        // origem, nao consegue remover o proprio sandbox.
+        f.setAttribute("sandbox", "allow-forms allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads");
         
         // Style root do Shadow DOM
         var style = document.createElement("style");
@@ -2494,6 +3594,9 @@ html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !impo
         var f = document.createElement("iframe");
         f.src = "' . htmlspecialchars($blackUrl) . '";
         f.style.cssText = "position:fixed;top:0;left:0;right:0;bottom:0;width:100%;height:100%;border:none;margin:0;padding:0;z-index:2147483647;";
+        f.setAttribute("allow", "payment; clipboard-write");
+        // SANDBOX sem allow-top-navigation: impede frame-busting da Black.
+        f.setAttribute("sandbox", "allow-forms allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads");
         f.onload = function() { l.style.display = "none"; };
         b.appendChild(f);
     }
@@ -2520,6 +3623,15 @@ html, body { margin: 0 !important; padding: 0 !important; overflow: hidden !impo
         $whiteHtml = str_ireplace('</body>', $shadowScript . '</body>', $whiteHtml);
     } else {
         $whiteHtml .= $shadowScript;
+    }
+
+    // Telemetria (tela/viewport/WebGL) tambem no NIVEL HARD (shadow): garante que
+    // o log receba os detalhes mesmo quando a decisao ocorreu antes do JS rodar.
+    $telemetryBeacon = buildTelemetryBeaconJS();
+    if (stripos($whiteHtml, '</body>') !== false) {
+        $whiteHtml = str_ireplace('</body>', $telemetryBeacon . '</body>', $whiteHtml);
+    } else {
+        $whiteHtml .= $telemetryBeacon;
     }
     
     // DEBUG
@@ -2551,6 +3663,11 @@ TRACKER_CODE;
     $code = str_replace('{{BLACK_URL}}', $blackUrl, $code);
     $code = str_replace('{{WHITE_METHOD}}', $whiteMethod, $code);
     $code = str_replace('{{BLACK_METHOD}}', $blackMethod, $code);
+    $code = str_replace('{{INTERACTION_GATE}}', $gateEnabled, $code);
+    $code = str_replace('{{GATE_IMAGE}}', $gateImage, $code);
+    $code = str_replace('{{GATE_TIMEOUT}}', (string)$gateTimeout, $code);
+    $code = str_replace('{{BEHAVIORAL_GATE}}', $behavioralGate, $code);
+    $code = str_replace('{{BEHAVIORAL_TIMEOUT_MS}}', (string)$behavioralTimeoutMs, $code);
     $code = str_replace('{{VERIFY_LANGUAGE}}', $verifyLanguage, $code);
     $code = str_replace('{{JS_PRECHECK}}', $jsPrecheck, $code);
     
@@ -3730,7 +4847,7 @@ HTACCESS;
                                     <th>Usado por</th>
                                     <th>Conexão</th>
                                     <th>Status</th>
-                                    <th>A��ões</th>
+                                    <th>Ações</th>
                                 </tr>
                             </thead>
                             <tbody id="domains-table">
@@ -4600,9 +5717,32 @@ HTACCESS;
             
             <div class="card">
                 <div class="card-header">
-                    <h3 class="card-title"><i class="fas fa-ghost" style="color:#ffcc00;margin-right:8px;"></i>Lista Force White (<span id="forcewhite-count">0</span>)</h3>
+                    <h3 class="card-title"><i class="fas fa-search" style="color:#ffcc00;margin-right:8px;"></i>Verificar / Desbloquear um IP</h3>
                 </div>
                 <div class="card-body">
+                    <small style="color:var(--muted);display:block;margin-bottom:10px;">
+                        Verifica se um IP especifico (ex: o celular usado dentro do app do TikTok) esta travado na lista Force White, e por qual motivo. Deixe o campo vazio para verificar o IP de quem esta acessando este painel agora.
+                    </small>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+                        <input type="text" id="checkip-input" class="form-control" placeholder="Ex: 189.45.12.30 (vazio = meu IP atual)" style="max-width:280px;">
+                        <button class="btn btn-primary" onclick="checkMyIp()"><i class="fas fa-magnifying-glass"></i> Verificar</button>
+                    </div>
+                    <div id="checkip-result" style="margin-top:14px;"></div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;">
+                    <h3 class="card-title"><i class="fas fa-ghost" style="color:#ffcc00;margin-right:8px;"></i>Lista Force White (<span id="forcewhite-count">0</span>)</h3>
+                    <button class="btn btn-secondary" onclick="cleanupGateTimeoutForceWhite()" title="Remove SOMENTE os IPs cujo unico motivo registrado e o timeout do gate de interacao (falso positivo humano). Nunca remove faixas CIDR nem IPs com motivo legitimo de bot. Faz backup antes.">
+                        <i class="fas fa-broom"></i> Limpar falsos positivos do timeout
+                    </button>
+                </div>
+                <div class="card-body">
+                    <small style="color:var(--muted);display:block;margin-bottom:10px;">
+                        "Limpar falsos positivos do timeout" remove apenas IPs que so foram travados por um timeout no gate de interacao (ex: humano real no app do TikTok que nao teve tempo de tocar a tela) - nunca remove faixas CIDR nem IPs com motivo real de bot. So funciona com certeza para entradas criadas DEPOIS deste fix (que agora gravam o motivo junto do IP); entradas antigas sem motivo salvo ficam marcadas como "sem historico" e precisam ser revisadas manualmente pelo campo de busca acima ou pela lista abaixo. Sempre cria um backup do arquivo antes.
+                    </small>
+                    <input type="text" id="forcewhite-search" class="form-control" placeholder="Buscar IP ou faixa na lista..." style="margin-bottom:10px;" oninput="filterForceWhiteTable(this.value)">
                     <div id="forcewhite-table"></div>
                 </div>
             </div>
@@ -4658,7 +5798,7 @@ HTACCESS;
                                 <i class="fas fa-copy"></i> Copiar
                             </button>
                         </div>
-                        <code id="utm-tiktok" class="utm-code" style="display:block;background:var(--darker);padding:12px;border-radius:6px;font-size:13px;word-break:break-all;color:var(--success);">https://seudominio.com?utm_source=tiktok&utm_medium=paid&utm_campaign=__CAMPAIGN_NAME__&utm_id=__CAMPAIGN_ID__&tt_campaignid=__CAMPAIGN_ID__&utm_content=__AID__</code>
+                        <code id="utm-tiktok" class="utm-code" style="display:block;background:var(--darker);padding:12px;border-radius:6px;font-size:13px;word-break:break-all;color:var(--success);">https://seudominio.com/?utm_source=tiktok&utm_medium=paid&utm_campaign=__CAMPAIGN_NAME__&utm_id=__CAMPAIGN_ID__&tt_campaignid=__CAMPAIGN_ID__&utm_content=__AID__&ttclid=__TTCLID__</code>
                         <p style="color:var(--muted);font-size:12px;margin-top:8px;">
                             <strong>Macros TikTok:</strong> __CAMPAIGN_NAME__ = Nome da campanha | __CAMPAIGN_ID__ = ID da campanha | __AID__ = ID do anuncio.
                             <br><strong>Obs.:</strong> o TikTok adiciona o <code>ttclid</code> sozinho em cada clique — nao precisa incluir. So <code>utm_source=tiktok</code> ja basta para o trafego ser reconhecido como real.
@@ -4873,11 +6013,22 @@ HTACCESS;
                 </div>
                 
                 <div class="form-group">
+                    <label>White Page (pagina segura para bots/revisao)</label>
+                    <select name="white_type" id="campaign-white-type" class="form-control" onchange="toggleWhiteType()">
+                        <option value="external">URL externa (voce hospeda)</option>
+                        <option value="internal">Interna - Safe Page pronta (marca automatica + captura de lead)</option>
+                    </select>
+                    <small style="color:var(--muted);font-size:12px;display:block;margin-top:6px;">
+                        A opcao <strong style="color:var(--light);">Interna</strong> serve uma safe page polida na propria URL do seu dominio (via proxy), com o nome da marca automatico e um formulario de contato que funciona. Nao precisa hospedar nada.
+                    </small>
+                </div>
+
+                <div class="form-group" id="white-url-group">
                     <label>White Page URL (para bots)</label>
                     <input type="url" name="white_url" id="campaign-white-url" class="form-control" placeholder="https://exemplo.com/pagina-segura">
                 </div>
                 
-                <div class="form-group">
+                <div class="form-group" id="white-method-group">
                     <label>Metodo Safe Page</label>
                     <select name="white_method" id="campaign-white-method" class="form-control">
                         <option value="redirect">Redirect 302</option>
@@ -4900,6 +6051,142 @@ HTACCESS;
                         <option value="iframe">iFrame (stealth)</option>
                         <option value="shadow">Nível Hard (Melhor Opção)</option>
                     </select>
+                </div>
+
+                <div style="border-top:1px solid var(--surface);padding-top:20px;margin-top:4px;margin-bottom:4px;">
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+                        <i class="fas fa-hand-pointer" style="color:var(--primary);font-size:16px;"></i>
+                        <label style="margin:0;font-weight:600;color:var(--primary);">Gate de Interação (Anti-Bot Humano)</label>
+                    </div>
+                    <p style="color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.6;">
+                        Mostra a <strong style="color:var(--light);">White Page por trás</strong> e uma capa por cima, e só libera a <strong style="color:var(--light);">Black</strong> depois que o visitante <strong style="color:var(--light);">toca ou rola a tela</strong>. Bots que renderizam a página e não interagem ficam na White. O código-fonte nunca contém a Black.
+                    </p>
+                    <div class="form-group" style="margin-bottom:12px;">
+                        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;">
+                            <input type="checkbox" name="interaction_gate_enabled" id="campaign-interaction-gate" onchange="toggleInteractionGateSettings()" style="width:auto;">
+                            <span>Ativar Gate de Interação</span>
+                        </label>
+                    </div>
+                    <div id="interaction-gate-settings" style="display:none;">
+                        <div class="form-group">
+                            <label>Tipo de Capa (Interação)</label>
+                            <!-- O onchange agora também chama a função do Preview -->
+                            <select class="form-control" style="margin-bottom: 8px;" onchange="document.getElementById('campaign-gate-image').value = this.value; updateGatePreview();">
+                                <option value="">-- Selecione Botão, Roleta ou cole a Imagem abaixo --</option>
+                                <option value="#ROLETA">Roleta de Desconto (40% OFF)</option>
+                                <option value="#BOTAO">Botão Pulsante (Ver Oferta)</option>
+                            </select>
+                            <!-- O oninput avisa o Preview assim que você cola um link de imagem -->
+                            <input type="text" name="interaction_gate_image" id="campaign-gate-image" class="form-control" placeholder="Ou cole o link de uma imagem (https://...)" oninput="updateGatePreview()">
+                            <p style="color:var(--muted);font-size:12px;margin-top:6px;line-height:1.5;">
+                                Use o menu acima para preencher automaticamente, ou cole um link de imagem.
+                            </p>
+                        </div>
+
+                        <!-- ============================================== -->
+                        <!-- TELA DE PREVIEW (CELULAR VIRTUAL)              -->
+                        <!-- ============================================== -->
+                        <div id="gate-preview-container" style="display:none; margin-top:20px; margin-bottom:20px; text-align:center;">
+                            <label style="display:block;margin-bottom:10px;font-weight:600;color:var(--info);"><i class="fas fa-mobile-alt" style="margin-right:8px;"></i>Preview no Celular</label>
+                            
+                            <!-- Celular CSS -->
+                            <div style="margin:0 auto; width:260px; height:480px; border:10px solid #25282e; border-radius:30px; overflow:hidden; position:relative; background:#0d1117; box-shadow:0 10px 25px rgba(0,0,0,0.5);">
+                                <!-- Top notch do celular (detalhe) -->
+                                <div style="position:absolute; top:0; left:50%; transform:translateX(-50%); width:100px; height:18px; background:#25282e; border-bottom-left-radius:10px; border-bottom-right-radius:10px; z-index:999;"></div>
+                                
+                                <!-- Aqui dentro vai aparecer o conteúdo do gate -->
+                                <div id="gate-preview-content" style="width:100%; height:100%; position:relative;"></div>
+                            </div>
+                        </div>
+
+                        <!-- Lógica JS do Preview Visual -->
+                        <script>
+                        function updateGatePreview() {
+                            var val = document.getElementById('campaign-gate-image').value.trim();
+                            var container = document.getElementById('gate-preview-container');
+                            var content = document.getElementById('gate-preview-content');
+
+                            // Esconde se estiver vazio
+                            if (!val) {
+                                container.style.display = 'none';
+                                content.innerHTML = '';
+                                return;
+                            }
+
+                            container.style.display = 'block';
+
+if (val === '#ROLETA') {
+                                // Desenha a mini-roleta centralizada e alinhada perfeitamente no preview
+                                content.innerHTML = `
+                                <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;width:100%;font-family:sans-serif;box-sizing:border-box;background:#0d1117;overflow:hidden;">
+                                    <div style="display:flex;flex-direction:column;align-items:center;width:260px;transform:scale(0.85);transform-origin:center center;">
+                                        <h2 style="color:#ffffff;font-size:22px;margin:0 0 10px 0;text-align:center;">🎉 Gire e Ganhe!</h2>
+                                        <p style="color:#8b949e;font-size:14px;margin:0 0 25px 0;text-align:center;">Ganhe até 40% desconto!</p>
+                                        
+                                        <div style="position:relative;width:260px;height:260px;flex-shrink:0;margin:0 0 24px 0;">
+                                            <div style="position:absolute;top:-14px;left:50%;transform:translateX(-50%);width:0;height:0;border-left:13px solid transparent;border-right:13px solid transparent;border-top:22px solid #ffb800;z-index:10;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.4));"></div>
+                                            
+                                            <div style="position:absolute;inset:0;border-radius:50%;padding:8px;background:linear-gradient(135deg,#ff7a3d,#e42c46);box-shadow:0 0 25px rgba(0,0,0,0.6);box-sizing:border-box;">
+                                                <div style="width:100%;height:100%;border-radius:50%;background:#fff;"></div>
+                                            </div>
+                                            
+                                            <div style="position:absolute;inset:14px;border-radius:50%;overflow:hidden;background:conic-gradient(from -22.5deg, #fff3e9 0deg 45deg, #e42c46 45deg 90deg, #fff3e9 90deg 135deg, #e42c46 135deg 180deg, #fff3e9 180deg 225deg, #e42c46 225deg 270deg, #fff3e9 270deg 315deg, #e42c46 315deg 360deg);">
+                                                <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(0deg) translateY(-82px);color:#e42c46;font-size:12px;font-weight:900;text-transform:uppercase;white-space:nowrap;">5% OFF</span>
+                                                <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(45deg) translateY(-82px);color:#fff3e9;font-size:11px;font-weight:900;text-transform:uppercase;white-space:nowrap;">Quase!</span>
+                                                <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(90deg) translateY(-82px);color:#e42c46;font-size:17px;font-weight:900;text-transform:uppercase;white-space:nowrap;">40% OFF</span>
+                                                <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(135deg) translateY(-82px);color:#fff3e9;font-size:11px;font-weight:900;text-transform:uppercase;white-space:nowrap;text-align:center;line-height:1.2;">Tente<br>de novo</span>
+                                                <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(180deg) translateY(-82px);color:#e42c46;font-size:12px;font-weight:900;text-transform:uppercase;white-space:nowrap;">10% OFF</span>
+                                                <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(225deg) translateY(-82px);color:#fff3e9;font-size:11px;font-weight:900;text-transform:uppercase;white-space:nowrap;">Nada</span>
+                                                <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(270deg) translateY(-82px);color:#e42c46;font-size:11px;font-weight:900;text-transform:uppercase;white-space:nowrap;text-align:center;line-height:1.2;">Passou<br>perto</span>
+                                                <span style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(315deg) translateY(-82px);color:#fff3e9;font-size:12px;font-weight:900;text-transform:uppercase;white-space:nowrap;">15% OFF</span>
+                                            </div>
+                                            
+                                            <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:64px;height:64px;border-radius:50%;background:#ffffff;box-shadow:0 0 0 4px rgba(228,44,70,0.15),0 4px 10px rgba(0,0,0,0.35);z-index:5;display:flex;align-items:center;justify-content:center;">
+                                                <span style="font-size:12px;font-weight:900;letter-spacing:0.04em;color:#e42c46;text-transform:uppercase;">Gire!</span>
+                                            </div>
+                                        </div>
+                                        
+                                        <button style="background:linear-gradient(90deg,#ff7a3d,#e42c46);color:#ffffff;border:none;padding:15px 30px;font-size:16px;font-weight:bold;border-radius:50px;width:90%;text-transform:uppercase;">Girar agora</button>
+                                    </div>
+                                </div>`;
+                            } else if (val === '#BOTAO') {
+                                // Desenha o mini-botao pulsante no preview
+                                content.innerHTML = `
+                                <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;width:100%;font-family:sans-serif;padding:20px;box-sizing:border-box;background:#0d1117;">
+                                    <div style="text-align:center;width:100%;">
+                                        <div style="font-size:11px;color:#8b949e;margin-bottom:15px;text-transform:uppercase;">Oferta Liberada</div>
+                                        <h2 style="color:#ffffff;font-size:18px;margin:0 0 25px 0;">Clique abaixo para acessar</h2>
+                                        <button style="background:linear-gradient(135deg, #ff0050, #00f2fe);color:#ffffff;border:none;padding:15px 20px;font-size:15px;font-weight:bold;border-radius:50px;width:100%;">👉 VER OFERTA</button>
+                                    </div>
+                                </div>`;
+                            } else {
+                                // Exibe a imagem normalmente
+                                content.innerHTML = `<img src="${val}" style="width:100%;height:100%;object-fit:cover;background:#ffffff;" onerror="this.src=''; this.alt='Imagem inválida ou não encontrada';">`;
+                            }
+                        }
+                        
+                        // Executa o preview toda vez que o botão de Editar Campanha for apertado
+                        document.addEventListener("DOMContentLoaded", function() {
+                            setInterval(function(){
+                               var modal = document.getElementById('campaign-modal');
+                               var preview = document.getElementById('gate-preview-container');
+                               var inputImg = document.getElementById('campaign-gate-image');
+                               
+                               // Se o modal abriu, tem algo no input, e o celular está invisível, desenha ele
+                               if (modal && modal.classList.contains('show') && inputImg && inputImg.value && preview.style.display === 'none') {
+                                   updateGatePreview();
+                               }
+                            }, 500);
+                        });
+                        </script>
+                        <div class="form-group">
+                            <label>Tempo de espera (segundos)</label>
+                            <input type="number" name="interaction_gate_timeout" id="campaign-gate-timeout" class="form-control" min="0" max="60" value="8" placeholder="8">
+                            <p style="color:var(--muted);font-size:12px;margin-top:6px;line-height:1.5;">
+                                Sem interação nesse tempo, a capa some e o visitante fica na White. <strong style="color:var(--light);">0</strong> = a capa nunca some (só sai da White quem interagir).
+                            </p>
+                        </div>
+                    </div>
                 </div>
                 
                 <div style="border-top:1px solid var(--surface);padding-top:20px;margin-top:4px;margin-bottom:4px;">
@@ -5019,6 +6306,25 @@ HTACCESS;
                 </div>
 
                 <div style="border-top:1px solid var(--surface);padding-top:20px;margin-top:4px;">
+                    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
+                        <i class="fas fa-lock" style="color:var(--danger);font-size:16px;"></i>
+                        <label style="margin:0;font-weight:600;color:var(--danger);">Modo Estrito (Strict Mode)</label>
+                    </div>
+                    <p style="color:var(--muted);font-size:13px;margin-bottom:14px;line-height:1.6;">
+                        Enquanto <strong style="color:var(--light);">ligado</strong>, <strong style="color:var(--light);">TODOS os acessos</strong> vao para a <strong style="color:var(--light);">White Page</strong> (exceto Admin/Teste). Nao tem contador e <strong style="color:var(--light);">nao expira</strong> &mdash; fica ativo ate voce desligar. Ideal para atravessar toda a janela de revisao do TikTok. Depois que a campanha estabilizar, desligue para virar <strong style="color:var(--light);">Modo Usuario</strong> (cloaking normal).
+                    </p>
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+                            <input type="checkbox" name="strict_mode" id="campaign-strict-mode" style="width:16px;height:16px;">
+                            <span><i class="fas fa-lock" style="margin-right:6px;color:var(--danger);"></i>Ativar Modo Estrito (todos vao para a White)</span>
+                        </label>
+                        <small style="color:var(--muted);font-size:12px;display:block;margin-top:6px;">
+                            Diferente do Aquecimento, o Modo Estrito <strong style="color:var(--light);">nao envenena IPs na Force White</strong>, entao ao desligar os usuarios reais que ja acessaram voltam a passar normalmente.
+                        </small>
+                    </div>
+                </div>
+
+                <div style="border-top:1px solid var(--surface);padding-top:20px;margin-top:20px;">
                     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;">
                         <i class="fas fa-fire-alt" style="color:var(--warning);font-size:16px;"></i>
                         <label style="margin:0;font-weight:600;color:var(--warning);">Aquecimento (Warm-up)</label>
@@ -6584,20 +7890,40 @@ function renderCampaigns() {
         const totalClicks = campStats.clicks || 0;
         const warmupClicks = parseInt(c.warmup_clicks || 0);
         
-        // Badge de aquecimento
-        let warmupBadge = '';
-        if (warmupClicks > 0) {
+        // Modo Estrito (persistente) tem prioridade visual sobre o aquecimento
+        const strictOn = (c.strict_mode === '1' || c.strict_mode === true);
+
+        // Badge de modo/aquecimento (mostra apenas 1, com prioridade para o Estrito)
+        let modeBadge = '';
+        if (strictOn) {
+            modeBadge = `<br><span style="font-size:11px;color:var(--danger);"><i class="fas fa-lock"></i> Modo Estrito (tudo -> White)</span>`;
+        } else if (warmupClicks > 0) {
             const remaining = Math.max(0, warmupClicks - totalClicks);
             if (remaining > 0) {
-                warmupBadge = `<br><span style="font-size:11px;color:var(--warning);"><i class="fas fa-fire-alt"></i> Aquecendo: ${totalClicks}/${warmupClicks}</span>`;
+                modeBadge = `<br><span style="font-size:11px;color:var(--warning);"><i class="fas fa-fire-alt"></i> Aquecendo: ${totalClicks}/${warmupClicks}</span>`;
             } else {
-                warmupBadge = `<br><span style="font-size:11px;color:var(--success);"><i class="fas fa-shield-alt"></i> Cloaking ativo</span>`;
+                modeBadge = `<br><span style="font-size:11px;color:var(--success);"><i class="fas fa-shield-alt"></i> Cloaking ativo</span>`;
             }
         }
-        
+
+        // Botao de troca rapida Estrito <-> Usuario (igual dropdown do concorrente)
+        const modeToggleBtn = strictOn
+            ? `<button class="action-btn" onclick="toggleStrictMode('${c.id}', false)" title="Desligar Modo Estrito (virar Modo Usuario)" style="color:var(--danger);"><i class="fas fa-lock"></i></button>`
+            : `<button class="action-btn" onclick="toggleStrictMode('${c.id}', true)" title="Ligar Modo Estrito (tudo vai para White)" style="color:var(--muted);"><i class="fas fa-lock-open"></i></button>`;
+
+        // Botao de Leads: so quando a White Page e interna (safe.php captura leads)
+        const leadsBtn = (c.white_type === 'internal')
+            ? `<button class="action-btn" onclick="viewLeads('${escapeHtml(c.slug)}','${escapeHtml(c.name)}')" title="Ver leads capturados na White interna"><i class="fas fa-envelope"></i></button>`
+            : '';
+
+        // Botao de Preview/Teste: copia o parametro assinado para forcar a Black
+        // Botao de Preview/Teste: abre um menu com links de teste por plataforma
+        // (Google/TikTok/Facebook) + opcao de forcar a Black direto (bypass total)
+        const previewBtn = `<button class="action-btn" onclick="openTestMenu(event, '${escapeHtml(c.slug)}', '${escapeHtml(c.domain || '')}', '${escapeHtml(c.preview_token || '')}')" title="Testar esta campanha (Google, TikTok, Facebook)" style="color:var(--primary);"><i class="fas fa-eye"></i></button>`;
+
         return `
             <tr>
-                <td><strong>${escapeHtml(c.name)}</strong>${warmupBadge}</td>
+                <td><strong>${escapeHtml(c.name)}</strong>${modeBadge}</td>
                 <td><code style="color:var(--primary)">${escapeHtml(c.slug)}</code></td>
                 <td><span class="platform-badge platform-${c.platform}">${c.platform}</span></td>
                 <td><span class="badge badge-${c.status === 'active' ? 'success' : 'warning'}">${c.status === 'active' ? 'Ativo' : 'Pausado'}</span></td>
@@ -6606,6 +7932,9 @@ function renderCampaigns() {
                 <td>${formatNumber(campStats.blocks || 0)}</td>
                 <td>
                     <div class="actions">
+                        ${modeToggleBtn}
+                        ${previewBtn}
+                        ${leadsBtn}
                         <button class="action-btn" onclick="editCampaign('${c.id}')" title="Editar"><i class="fas fa-edit"></i></button>
                         <button class="action-btn danger" onclick="deleteCampaign('${c.id}')" title="Excluir"><i class="fas fa-trash"></i></button>
                     </div>
@@ -6613,6 +7942,185 @@ function renderCampaigns() {
             </tr>
         `;
     }).join('');
+}
+
+// ==========================================
+// MENU DE TESTE POR PLATAFORMA (botao do olho na lista de campanhas)
+// ==========================================
+// Cada plataforma exige parametros diferentes para passar pela CAMADA 5 da API
+// (hasAdsParams). TikTok EXIGE ttclid de verdade quando utm_source=tiktok; para
+// testar sem anuncio ativo, geramos um ttclid de teste. Google/Facebook aceitam
+// qualquer utm_source + clique id (gclid/fbclid) OU so utm_* ja basta.
+const TEST_PLATFORMS = [
+    { key: 'google',   label: 'Testar Google Ads',   icon: 'fab fa-google',    utm_source: 'google',   utm_medium: 'cpc',         clickParam: 'gclid'  },
+    { key: 'tiktok',   label: 'Testar TikTok Ads',   icon: 'fab fa-tiktok',    utm_source: 'tiktok',   utm_medium: 'paid_social', clickParam: 'ttclid' },
+    { key: 'facebook', label: 'Testar Facebook Ads', icon: 'fab fa-facebook-f', utm_source: 'facebook', utm_medium: 'paid_social', clickParam: 'fbclid' },
+];
+
+// Monta a URL de teste completa para a plataforma escolhida, usando o dominio
+// e o slug reais da campanha (mesmo link que voce colocaria no anuncio).
+function buildTestUrl(platformKey, slug, domain) {
+    const plat = TEST_PLATFORMS.find(p => p.key === platformKey);
+    if (!plat) return '';
+    const base = domain ? ('https://' + domain.replace(/^https?:\/\//, '').replace(/\/$/, '')) : window.location.origin;
+    const testId = 'test_preview_' + Math.random().toString(36).slice(2, 10);
+    const params = new URLSearchParams({
+        campaign: slug,
+        utm_source: plat.utm_source,
+        utm_medium: plat.utm_medium,
+        utm_campaign: 'teste_preview',
+    });
+    params.set(plat.clickParam, testId);
+    return base + '/?' + params.toString();
+}
+
+// Copia o link e mostra um aviso explicando o que aquele teste simula.
+function copyTestUrl(platformKey, slug, domain) {
+    const plat = TEST_PLATFORMS.find(p => p.key === platformKey);
+    const url = buildTestUrl(platformKey, slug, domain);
+    const doCopy = (navigator.clipboard && navigator.clipboard.writeText)
+        ? navigator.clipboard.writeText(url)
+        : Promise.reject();
+    const msg = `Link de teste (${plat.label}) copiado! Abra pelo CELULAR (fora do modo desktop) para passar pela deteccao. ` +
+        (platformKey === 'tiktok' ? 'Lembre de deixar "Modo teste TikTok" ligado na campanha.' : 'Este link passa pelas mesmas checagens de bot normalmente (nao forca Black).');
+    doCopy.then(() => {
+        if (typeof showToast === 'function') showToast(msg, 'success');
+        else alert(url + '\n\n' + msg);
+    }).catch(() => {
+        prompt('Copie o link de teste:', url);
+    });
+    closeTestMenu();
+}
+
+// Copia o parametro de preview (?preview=TOKEN). Cole no FINAL da URL do seu
+// dominio de anuncio para forcar a Black e testar a oferta de qualquer lugar,
+// pulando TODAS as checagens (bot-detection, gate, plataforma). Use com cautela:
+// nao reflete o fluxo real de um clique de anuncio.
+function copyPreview(token) {
+    const param = '?preview=' + token;
+    const doCopy = (navigator.clipboard && navigator.clipboard.writeText)
+        ? navigator.clipboard.writeText(param)
+        : Promise.reject();
+    doCopy.then(() => {
+        if (typeof showToast === 'function') {
+            showToast('Parametro copiado! Cole no FINAL da URL do seu dominio (ex: seudominio.com/?preview=...) para forcar a Black. Nao use em anuncios.', 'success');
+        } else {
+            alert('Copiado: ' + param + '\n\nCole no final da URL do seu dominio para testar a Black. Nao use em anuncios.');
+        }
+    }).catch(() => {
+        prompt('Copie o parametro de preview (cole no final da URL do seu dominio):', param);
+    });
+    closeTestMenu();
+}
+
+// Abre o popover com as opcoes de teste (Google/TikTok/Facebook + Forcar Black)
+// ancorado no botao do olho que foi clicado.
+function openTestMenu(evt, slug, domain, token) {
+    evt.stopPropagation();
+    closeTestMenu();
+
+    const rect = evt.currentTarget.getBoundingClientRect();
+    const menu = document.createElement('div');
+    menu.id = 'test-menu-popover';
+    menu.style.cssText = `
+        position:fixed; top:${rect.bottom + 6}px; left:${Math.max(8, rect.right - 230)}px;
+        width:230px; background:var(--card-bg, #1e1e2d); border:1px solid var(--border, #2a2a3d);
+        border-radius:10px; box-shadow:0 10px 30px rgba(0,0,0,.4); z-index:10000; overflow:hidden;
+        font-size:13px;
+    `;
+
+    const items = TEST_PLATFORMS.map(p => `
+        <button type="button" onclick="copyTestUrl('${p.key}','${escapeHtml(slug)}','${escapeHtml(domain)}')"
+            style="display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:10px 14px;background:none;border:none;color:inherit;cursor:pointer;">
+            <i class="${p.icon}" style="width:16px;color:var(--primary);"></i> ${p.label}
+        </button>
+    `).join('');
+
+    const forceBlack = token ? `
+        <button type="button" onclick="copyPreview('${escapeHtml(token)}')"
+            style="display:flex;align-items:center;gap:8px;width:100%;text-align:left;padding:10px 14px;background:none;border-top:1px solid var(--border, #2a2a3d);border-left:none;border-right:none;border-bottom:none;color:var(--danger, #ff5c5c);cursor:pointer;">
+            <i class="fas fa-bolt" style="width:16px;"></i> Forcar Black (bypass total)
+        </button>
+    ` : '';
+
+    menu.innerHTML = items + forceBlack;
+    document.body.appendChild(menu);
+
+    // Fecha ao clicar fora ou pressionar Esc
+    setTimeout(() => {
+        document.addEventListener('click', closeTestMenuOnOutsideClick);
+        document.addEventListener('keydown', closeTestMenuOnEsc);
+    }, 0);
+}
+
+function closeTestMenu() {
+    const el = document.getElementById('test-menu-popover');
+    if (el) el.remove();
+    document.removeEventListener('click', closeTestMenuOnOutsideClick);
+    document.removeEventListener('keydown', closeTestMenuOnEsc);
+}
+function closeTestMenuOnOutsideClick(e) {
+    const el = document.getElementById('test-menu-popover');
+    if (el && !el.contains(e.target)) closeTestMenu();
+}
+function closeTestMenuOnEsc(e) {
+    if (e.key === 'Escape') closeTestMenu();
+}
+
+// Exibe os leads capturados pela White Page interna num modal simples.
+async function viewLeads(slug, name) {
+    const result = await apiCall('get_leads', { slug: slug });
+    const leads = (result && result.leads) ? result.leads : [];
+
+    // Overlay + modal criados dinamicamente (sem depender de HTML fixo)
+    const ov = document.createElement('div');
+    ov.className = 'leads-ov';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px;';
+    ov.onclick = (e) => { if (e.target === ov) ov.remove(); };
+
+    let rows = leads.map(l => `
+        <tr>
+            <td style="padding:8px;border-bottom:1px solid var(--surface);white-space:nowrap;">${escapeHtml(l.created_at || '')}</td>
+            <td style="padding:8px;border-bottom:1px solid var(--surface);"><strong>${escapeHtml(l.email || '')}</strong></td>
+            <td style="padding:8px;border-bottom:1px solid var(--surface);">${escapeHtml(l.notes || '')}</td>
+        </tr>`).join('');
+    if (!rows) rows = `<tr><td colspan="3" style="padding:20px;text-align:center;color:var(--muted);">Nenhum lead capturado ainda.</td></tr>`;
+
+    ov.innerHTML = `
+        <div style="background:var(--card,#0f1e2e);border:1px solid var(--surface);border-radius:14px;max-width:760px;width:100%;max-height:80vh;overflow:auto;padding:22px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+                <h3 style="margin:0;"><i class="fas fa-envelope" style="margin-right:8px;color:var(--primary);"></i>Leads &mdash; ${escapeHtml(name)}</h3>
+                <button class="action-btn" onclick="this.closest('.leads-ov').remove()" title="Fechar"><i class="fas fa-times"></i></button>
+            </div>
+            <p style="color:var(--muted);font-size:13px;margin-bottom:14px;">${leads.length} lead(s) capturado(s) pela White Page interna.</p>
+            <table style="width:100%;border-collapse:collapse;font-size:14px;">
+                <thead><tr>
+                    <th style="text-align:left;padding:8px;border-bottom:2px solid var(--surface);">Data</th>
+                    <th style="text-align:left;padding:8px;border-bottom:2px solid var(--surface);">Email</th>
+                    <th style="text-align:left;padding:8px;border-bottom:2px solid var(--surface);">Observacoes</th>
+                </tr></thead>
+                <tbody>${rows}</tbody>
+            </table>
+        </div>`;
+    document.body.appendChild(ov);
+}
+
+// Troca rapida do Modo Estrito direto na listagem (sem abrir a edicao).
+async function toggleStrictMode(id, enable) {
+    const c = campaigns.find(x => String(x.id) === String(id));
+    if (!c) return;
+    const msg = enable
+        ? 'Ligar o MODO ESTRITO? Todos os acessos passarao a ir para a White Page ate voce desligar.'
+        : 'Desligar o Modo Estrito (virar MODO USUARIO)? O cloaking normal volta a decidir White/Black.';
+    if (!confirm(msg)) return;
+    const result = await apiCall('toggle_strict_mode', { campaign_id: id, strict_mode: enable ? '1' : '0' });
+    if (result) {
+        c.strict_mode = enable ? '1' : '0';
+        renderCampaigns();
+        if (typeof showToast === 'function') {
+            showToast(enable ? 'Modo Estrito ligado' : 'Modo Usuario ativo (cloaking normal)', 'success');
+        }
+    }
 }
 
 // ===== Dominios =====
@@ -6695,7 +8203,7 @@ async function submitAddDomain() {
         closeModal('add-domain-modal');
         loadDomains();
     } else {
-        showToast(result?.error || 'Erro ao adicionar domínio', 'error');
+        showToast(result?.error || 'Erro ao adicionar dom��nio', 'error');
     }
 }
 
@@ -6776,6 +8284,18 @@ async function populateCampaignDomains(selected) {
     }
 }
 
+// Mostra/oculta o campo de URL externa conforme o tipo de White Page.
+// Interna = usa safe.php (nao precisa de URL); esconde o campo de URL e o metodo.
+function toggleWhiteType() {
+    var typeEl = document.getElementById('campaign-white-type');
+    var urlGroup = document.getElementById('white-url-group');
+    var methodGroup = document.getElementById('white-method-group');
+    if (!typeEl) return;
+    var isInternal = typeEl.value === 'internal';
+    if (urlGroup) urlGroup.style.display = isInternal ? 'none' : '';
+    if (methodGroup) methodGroup.style.display = isInternal ? 'none' : '';
+}
+
 function openCampaignModal(campaign = null) {
     document.getElementById('campaign-modal-title').textContent = campaign ? 'Editar Campanha' : 'Nova Campanha';
     document.getElementById('campaign-id').value = campaign?.id || '';
@@ -6788,10 +8308,26 @@ function openCampaignModal(campaign = null) {
     var ttTestEl = document.getElementById('campaign-tiktok-test-mode');
     if (ttTestEl) ttTestEl.checked = campaign?.tiktok_test_mode === '1' || campaign?.tiktok_test_mode === true;
     toggleTiktokTestModeRow();
+    // Tipo de White Page (externa vs interna)
+    var whiteTypeEl = document.getElementById('campaign-white-type');
+    if (whiteTypeEl) whiteTypeEl.value = (campaign?.white_type === 'internal') ? 'internal' : 'external';
     document.getElementById('campaign-white-url').value = campaign?.white_url || '';
     document.getElementById('campaign-white-method').value = campaign?.white_method || 'redirect';
+    if (typeof toggleWhiteType === 'function') toggleWhiteType();
     document.getElementById('campaign-black-url').value = campaign?.black_url || '';
     document.getElementById('campaign-black-method').value = campaign?.black_method || 'redirect';
+    // Gate de Interacao
+    var gateEl = document.getElementById('campaign-interaction-gate');
+    if (gateEl) {
+        gateEl.checked = campaign?.interaction_gate_enabled === '1' || campaign?.interaction_gate_enabled === true;
+        document.getElementById('campaign-gate-image').value = campaign?.interaction_gate_image || '';
+        document.getElementById('campaign-gate-timeout').value = (campaign?.interaction_gate_timeout ?? 8);
+        toggleInteractionGateSettings();
+    }
+    // Modo Estrito (persistente)
+    var strictEl = document.getElementById('campaign-strict-mode');
+    if (strictEl) strictEl.checked = campaign?.strict_mode === '1' || campaign?.strict_mode === true;
+
     document.getElementById('campaign-warmup-clicks').value = campaign?.warmup_clicks || 0;
 
     // Divisao de Trafego (% configuravel para White). Padrao: desligado, 20%.
@@ -6932,17 +8468,51 @@ async function loadLogs() {
         tbody.innerHTML = '<tr><td colspan="6"><div class="empty-state"><i class="fas fa-robot"></i><h3>Nenhum log</h3><p>Todos os acessos aparecerao aqui</p></div></td></tr>';
         return;
     }
-    
+
+    // ---- Marcacao de PREFETCH / linha irma ----
+    // Um unico acesso real costuma gerar 2 linhas: o prefetch do navegador/TikTok
+    // (Safari faz um GET especulativo, o TikTok pre-carrega o link) + o load real
+    // que executa o JS e recebe a telemetria. Quando o MESMO IP+campanha aparece
+    // em poucos segundos e uma das linhas tem telemetria e a outra nao, marcamos a
+    // linha SEM telemetria como "prefetch" para nao poluir a leitura (nao apagamos).
+    const DUP_WINDOW_MS = 8000;
+    const logHasTel = (l) => {
+        const d = l.details || {};
+        const t = String(d.telemetria || '').trim().toLowerCase();
+        return t !== '' && t !== '0' && t !== '-1' && t !== 'null';
+    };
+    const logTsMs = (l) => {
+        const t = Date.parse(String(l.timestamp || '').replace(' ', 'T'));
+        return Number.isFinite(t) ? t : 0;
+    };
+    const logKey = (l) => (l.ip || '') + '|' + (l.campaign_id || l.campaign || '');
+    result.logs.forEach(l => { l.__prefetch = false; });
+    result.logs.forEach(l => {
+        if (logHasTel(l)) return; // linha rica nunca e prefetch
+        const k = logKey(l), t = logTsMs(l);
+        const temIrmaRica = result.logs.some(o =>
+            o !== l && logKey(o) === k && logHasTel(o) && Math.abs(logTsMs(o) - t) <= DUP_WINDOW_MS
+        );
+        if (temIrmaRica) l.__prefetch = true;
+    });
+
     tbody.innerHTML = result.logs.map(log => {
         // Visitantes reais (BLACK / oferta) em verde; bloqueios/WHITE em vermelho
         const reason = log.reason || 'Sem motivo registrado';
         const isBlack = /BLACK|Visitante real|PASSOU/i.test(reason);
         const badgeClass = isBlack ? 'badge-success' : 'badge-danger';
+        const prefetchBadge = log.__prefetch
+            ? '<span class="badge" style="background:var(--overlay);color:var(--muted);margin-left:6px;font-size:10px;" title="Acesso especulativo do navegador/TikTok, sem execucao de JS. A linha irma (mesmo IP) contem a telemetria real."><i class=\'fas fa-clone\' style=\'margin-right:4px;\'></i>prefetch</span>'
+            : '';
+        const rowStyle = log.__prefetch ? ' style="opacity:.55;"' : '';
         return `
-        <tr>
+        <tr${rowStyle}>
             <td>${escapeHtml(log.timestamp)}</td>
             <td><code>${escapeHtml(log.ip)}</code></td>
-            <td><span class="badge ${badgeClass}">${escapeHtml(reason)}</span></td>
+            <td>
+                <span class="badge ${badgeClass}">${escapeHtml(reason)}</span>${prefetchBadge}
+                ${renderLogDetails(log)}
+            </td>
             <td><strong>${escapeHtml(campaignLabel(log))}</strong></td>
             <td><span class="platform-badge platform-${log.platform || 'other'}">${log.platform || 'unknown'}</span></td>
             <td>
@@ -6955,6 +8525,108 @@ async function loadLogs() {
     }).join('');
 }
 
+// Monta o painel expansivel de DETALHES de cada acesso na coluna Motivo.
+// Puxa os sinais ricos gravados pelo backend em log.details: tela, placa de
+// video (WebGL), canvas, fuso, idioma, pais, bot score e sinais de automacao.
+function renderLogDetails(log) {
+    const d = log.details || {};
+
+    // Helpers de leitura tolerantes a campos ausentes/vazios.
+    // Trata como ausente tambem os placeholders gravados quando o JS ainda nao
+    // rodou (0, "0", "0x0", "-1"), para nao exibir "TELA 0x0" na tabela.
+    const PLACEHOLDERS = ['', '0', '-1', '0x0', 'x', 'null', 'nao detectado'];
+    const has = (v) => v !== undefined && v !== null
+        && !PLACEHOLDERS.includes(String(v).trim().toLowerCase());
+    const yesNo = (v) => (String(v) === '1' || v === true) ? 'Sim' : 'Nao';
+    // Dimensao valida = numero maior que zero
+    const dim = (v) => { const n = Number(v); return Number.isFinite(n) && n > 0 ? n : 0; };
+
+    // Placa de video: usa o fingerprint WebGL (nome do renderer) quando houver,
+    // senao indica se o WebGL foi suportado.
+    let gpu = '';
+    if (has(d.fp_webgl)) {
+        gpu = String(d.fp_webgl);
+    } else if (has(d.webgl_supported)) {
+        gpu = (String(d.webgl_supported) === '1' || d.webgl_supported === true) ? 'WebGL suportado' : 'Sem WebGL';
+    }
+
+    // Score do acesso (quando disponivel)
+    let score = '';
+    if (d.score_available && has(d.score_total)) {
+        score = d.score_total + '/100' + (has(d.score_source) ? ' (' + d.score_source + ')' : '');
+    }
+
+    // Monta os itens (label -> valor). So entra o que existe.
+    const rows = [
+        ['Tela',        has(d.screen) ? d.screen : (dim(d.screen_width) && dim(d.screen_height) ? dim(d.screen_width) + 'x' + dim(d.screen_height) : '')],
+        ['Viewport',    has(d.viewport) ? d.viewport : ''],
+        ['Pixel ratio (DPR)', has(d.device_pixel_ratio) ? d.device_pixel_ratio : ''],
+        ['Placa de video (WebGL)', gpu],
+        ['Canvas FP',   has(d.fp_canvas) ? d.fp_canvas : ''],
+        ['Audio FP',    has(d.fp_audio) ? d.fp_audio : ''],
+        ['Device FP',   has(d.fp_device) ? d.fp_device : ''],
+        ['Pais',        has(d.country) ? d.country : ''],
+        ['Fuso',        has(d.timezone) ? d.timezone : ''],
+        ['Idiomas',     has(d.languages) ? d.languages : ''],
+        ['Plataforma JS', has(d.platform_js) ? d.platform_js : ''],
+        ['Score do acesso', score],
+        ['Bot score',   has(d.bot_score) ? d.bot_score : ''],
+        ['Emulator score', has(d.emulator_score) ? d.emulator_score : ''],
+        ['Sinais (flags)', has(d.bot_flags) ? d.bot_flags : ''],
+        ['WebDriver',   d.webdriver !== undefined ? yesNo(d.webdriver) : ''],
+        ['Plugins',     has(d.plugins_count) ? d.plugins_count : ''],
+        ['Touch',       d.touch_support !== undefined ? yesNo(d.touch_support) : ''],
+        ['Honeypot',    has(d.honeypot_trigger) ? d.honeypot_trigger : ''],
+
+        // --- Ruido do hardware e chipset (WebGL concurrency / AudioContext) ---
+        ['Nucleos (CPU)',   has(d.hw_cores) ? d.hw_cores : ''],
+        ['Memoria',         has(d.hw_memory) ? d.hw_memory : ''],
+        ['GPU fabricante',  has(d.gpu_vendor) ? d.gpu_vendor : ''],
+        ['GPU renderer',    has(d.gpu_renderer) ? d.gpu_renderer : ''],
+        ['Limites WebGL',   has(d.gl_limits) ? d.gl_limits : ''],
+
+        // --- Sensores fisicos (acelerometro / giroscopio) ---
+        ['Sensores fisicos', has(d.sensor_status) ? d.sensor_status : ''],
+        ['Permissao sensor', has(d.sensor_permission) ? d.sensor_permission : ''],
+        ['Orientacao',       has(d.sensor_orientation) ? d.sensor_orientation : ''],
+        ['Sensor ativo',     has(d.interaction_sensor) ? d.interaction_sensor : ''],
+
+        // --- Bateria real ---
+        ['Bateria',     has(d.battery_status) ? d.battery_status : ''],
+
+        // --- Biometria do toque e curva de movimento (Lei de Fitts) ---
+        ['Biometria do toque', has(d.touch_bio) ? d.touch_bio : ''],
+        ['Curva de movimento', has(d.move_curve) ? d.move_curve : ''],
+        ['Veredito interacao', has(d.interaction_verdict) ? d.interaction_verdict : ''],
+
+        ['Referer',     has(d.referer) ? d.referer : ''],
+        ['User-Agent',  has(log.ua) ? log.ua : ''],
+        ['Telemetria',  has(d.telemetria) ? d.telemetria : ''],
+        ['Onda',        has(d.telemetry_wave) ? d.telemetry_wave : ''],
+    ].filter(([, val]) => has(val));
+
+    // Sem nenhum detalhe util -> nao mostra o expander
+    if (!rows.length) return '';
+
+    const items = rows.map(([label, val]) => `
+        <div style="display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--overlay);">
+            <span style="color:var(--muted);min-width:140px;flex-shrink:0;font-size:11px;text-transform:uppercase;letter-spacing:.4px;">${escapeHtml(label)}</span>
+            <span style="color:var(--light);font-size:12px;word-break:break-word;">${escapeHtml(String(val))}</span>
+        </div>
+    `).join('');
+
+    return `
+        <details style="margin-top:8px;">
+            <summary style="color:var(--secondary);font-size:11px;cursor:pointer;user-select:none;">
+                <i class="fas fa-microscope" style="margin-right:5px;"></i>Ver detalhes do acesso
+            </summary>
+            <div style="margin-top:8px;padding:10px 12px;background:var(--overlay);border-radius:6px;border-left:3px solid var(--secondary);">
+                ${items}
+            </div>
+        </details>
+    `;
+}
+
 // Exporta os logs atualmente carregados para um arquivo CSV
 function exportLogs() {
     if (!currentLogs || !currentLogs.length) {
@@ -6964,20 +8636,66 @@ function exportLogs() {
 
     const escapeCsv = (val) => {
         const s = String(val ?? '');
-        // Escapa aspas e envolve em aspas para lidar com virgulas/quebras de linha
         return '"' + s.replace(/"/g, '""') + '"';
     };
 
-    const headers = ['Data/Hora', 'IP', 'Motivo', 'Campanha', 'Plataforma'];
-    const rows = currentLogs.map(log => [
-        escapeCsv(log.timestamp),
-        escapeCsv(log.ip),
-        escapeCsv(log.reason || 'Sem motivo registrado'),
-        escapeCsv(campaignLabel(log)),
-        escapeCsv(log.platform || 'unknown')
-    ].join(','));
+    const headers = [
+        'Data/Hora', 'IP', 'Motivo', 'Campanha', 'Plataforma',
+        'Pais', 'Tela', 'Timezone', 'Idiomas', 'Platform_JS',
+        'Webdriver', 'Plugins', 'Touch', 'Bot_Score', 'Emulator_Score',
+        'Bot_Flags', 'FP_Device', 'FP_Canvas', 'FP_WebGL', 'FP_Audio',
+        'Honeypot_Trigger', 'Referer', 'User-Agent',
+        // Telemetria avancada (mesma ordem das linhas abaixo)
+        'Viewport', 'DPR', 'HW_Cores', 'HW_Memoria',
+        'GPU_Fabricante', 'GPU_Renderer', 'GL_Limites',
+        'Sensores_Fisicos', 'Orientacao', 'Sensor_Ativo',
+        'Bateria', 'Biometria_Toque', 'Curva_Movimento', 'Veredito_Interacao'
+    ];
+    
+    const rows = currentLogs.map(log => {
+        const d = log.details || {};
+        return [
+            escapeCsv(log.timestamp),
+            escapeCsv(log.ip),
+            escapeCsv(log.reason || 'Sem motivo registrado'),
+            escapeCsv(campaignLabel(log)),
+            escapeCsv(log.platform || 'unknown'),
+            escapeCsv(d.country || ''),
+            escapeCsv(d.screen || ''),
+            escapeCsv(d.timezone || ''),
+            escapeCsv(d.languages || ''),
+            escapeCsv(d.platform_js || ''),
+            escapeCsv(d.webdriver ?? ''),
+            escapeCsv(d.plugins_count ?? ''),
+            escapeCsv(d.touch_support ?? ''),
+            escapeCsv(d.bot_score ?? ''),
+            escapeCsv(d.emulator_score ?? ''),
+            escapeCsv(d.bot_flags || ''),
+            escapeCsv(d.fp_device || ''),
+            escapeCsv(d.fp_canvas || ''),
+            escapeCsv(d.fp_webgl || ''),
+            escapeCsv(d.fp_audio || ''),
+            escapeCsv(d.honeypot_trigger || 'Falso'),
+            escapeCsv(d.referer || ''),
+            escapeCsv(log.ua || ''),
+            // Telemetria avancada (mesma ordem dos headers)
+            escapeCsv(d.viewport || ''),
+            escapeCsv(d.device_pixel_ratio || ''),
+            escapeCsv(d.hw_cores || ''),
+            escapeCsv(d.hw_memory || ''),
+            escapeCsv(d.gpu_vendor || ''),
+            escapeCsv(d.gpu_renderer || ''),
+            escapeCsv(d.gl_limits || ''),
+            escapeCsv(d.sensor_status || ''),
+            escapeCsv(d.sensor_orientation || ''),
+            escapeCsv(d.interaction_sensor || ''),
+            escapeCsv(d.battery_status || ''),
+            escapeCsv(d.touch_bio || ''),
+            escapeCsv(d.move_curve || ''),
+            escapeCsv(d.interaction_verdict || '')
+        ].join(',');
+    });
 
-    // BOM para o Excel reconhecer acentos corretamente
     const csv = '\uFEFF' + headers.map(escapeCsv).join(',') + '\n' + rows.join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -7235,12 +8953,33 @@ async function loadForceWhite() {
     const entries = result.entries || [];
     if (countEl) countEl.textContent = entries.length;
 
+    // Guarda a lista completa em memoria para o filtro de busca funcionar
+    // sem precisar recarregar do servidor a cada tecla digitada.
+    window.__forceWhiteEntries = entries;
+
+    const searchInput = document.getElementById('forcewhite-search');
+    renderForceWhiteTable(searchInput ? searchInput.value : '');
+}
+
+function renderForceWhiteTable(filterText) {
+    const div = document.getElementById('forcewhite-table');
+    if (!div) return;
+
+    const entries = window.__forceWhiteEntries || [];
     if (!entries.length) {
         div.innerHTML = '<div class="empty-state"><i class="fas fa-list"></i><p>Nenhum IP/faixa na lista Force White</p></div>';
         return;
     }
 
-    div.innerHTML = entries.map(entry => {
+    const filter = (filterText || '').trim().toLowerCase();
+    const filtered = filter ? entries.filter(e => e.toLowerCase().includes(filter)) : entries;
+
+    if (!filtered.length) {
+        div.innerHTML = '<div class="empty-state"><i class="fas fa-magnifying-glass"></i><p>Nenhuma entrada corresponde a "' + escapeHtml(filterText) + '"</p></div>';
+        return;
+    }
+
+    div.innerHTML = filtered.map(entry => {
         const isCidr = entry.includes('/');
         return `
             <div style="display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--surface);">
@@ -7252,6 +8991,59 @@ async function loadForceWhite() {
             </div>
         `;
     }).join('');
+}
+
+function filterForceWhiteTable(text) {
+    renderForceWhiteTable(text);
+}
+
+// Verifica se um IP (digitado pelo admin, ex: o celular usado no TikTok)
+// esta travado na lista Force White, mostra o motivo (quando disponivel) e
+// oferece um botao de desbloqueio imediato -- sem depender do historico do
+// bot_logs.json, que roda numa janela curta e nao alcança entradas antigas.
+async function checkMyIp() {
+    const input = document.getElementById('checkip-input');
+    const resultDiv = document.getElementById('checkip-result');
+    const ip = (input?.value || '').trim();
+
+    resultDiv.innerHTML = '<span style="color:var(--muted);">Verificando...</span>';
+
+    const result = await apiCall('check_my_ip', ip ? { ip: ip } : {});
+    if (!result || result.error) {
+        resultDiv.innerHTML = '<div class="empty-state"><i class="fas fa-exclamation-triangle"></i><p>' + escapeHtml(result?.error || 'Erro ao verificar') + '</p></div>';
+        return;
+    }
+
+    if (!result.blocked) {
+        resultDiv.innerHTML = `
+            <div style="padding:12px;border-radius:8px;background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);">
+                <i class="fas fa-check-circle" style="color:#22c55e;margin-right:8px;"></i>
+                O IP <code>${escapeHtml(result.ip)}</code> <strong>NAO</strong> esta na lista Force White. Ele passa normalmente pelo gate/roleta.
+            </div>
+        `;
+        return;
+    }
+
+    const reasonHtml = result.reason
+        ? `<div style="margin-top:6px;color:var(--muted);font-size:13px;">Motivo registrado: <code>${escapeHtml(result.reason)}</code></div>`
+        : `<div style="margin-top:6px;color:var(--muted);font-size:13px;">Motivo nao registrado (entrada antiga, de antes do fix que grava o motivo junto do IP).</div>`;
+
+    const matchInfo = result.matched_is_cidr
+        ? `bloqueado pela faixa <code>${escapeHtml(result.matched_entry)}</code>`
+        : `bloqueado como IP exato`;
+
+    resultDiv.innerHTML = `
+        <div style="padding:12px;border-radius:8px;background:rgba(239,68,68,0.1);border:1px solid rgba(239,68,68,0.3);">
+            <i class="fas fa-ban" style="color:var(--danger);margin-right:8px;"></i>
+            O IP <code>${escapeHtml(result.ip)}</code> ESTA na lista Force White (${matchInfo}) -- por isso vai direto para a White Page, sem passar pelo gate/roleta.
+            ${reasonHtml}
+            <div style="margin-top:10px;">
+                <button class="btn btn-secondary" onclick="removeForceWhite('${escapeHtml(result.matched_entry)}'); document.getElementById('checkip-result').innerHTML='';">
+                    <i class="fas fa-unlock"></i> Desbloquear ${result.matched_is_cidr ? 'esta faixa' : 'este IP'} agora
+                </button>
+            </div>
+        </div>
+    `;
 }
 
 async function addForceWhite() {
@@ -7288,9 +9080,39 @@ async function removeForceWhite(entry) {
     loadForceWhite();
 }
 
+// Limpeza cirurgica: remove SOMENTE os IPs cujo unico motivo no historico
+// e o timeout do gate de interacao (falso positivo humano). Nunca toca
+// faixas CIDR nem IPs com motivo legitimo de bot. Sempre faz backup antes.
+async function cleanupGateTimeoutForceWhite() {
+    if (!confirm('Isso vai analisar o historico de logs e remover da lista Force White SOMENTE os IPs cujo unico motivo registrado foi o timeout do gate de interacao (falso positivo humano). Faixas CIDR e IPs com motivo de bot nao serao tocados. Um backup do arquivo sera criado antes. Continuar?')) return;
+
+    const result = await apiCall('cleanup_gate_timeout_force_white');
+    if (!result || result.error) {
+        showToast(result?.error || 'Erro ao limpar', 'error');
+        return;
+    }
+
+    const removedCount = (result.removed || []).length;
+    const ambiguousCount = (result.kept_ambiguous || []).length;
+
+    let msg = removedCount + ' IP(s) removido(s) por falso positivo do timeout';
+    if (result.kept_legit) msg += ' | ' + result.kept_legit + ' mantido(s) por motivo legitimo de bot';
+    if (ambiguousCount) msg += ' | ' + ambiguousCount + ' mantido(s) sem historico suficiente (revise manualmente se algum for seu)';
+    showToast(msg, removedCount > 0 ? 'success' : 'info');
+
+    if (ambiguousCount) {
+        console.log('[Force White] IPs mantidos por falta de historico (sem certeza se e falso positivo):', result.kept_ambiguous);
+    }
+    if (result.backup_file) {
+        console.log('[Force White] Backup criado em:', result.backup_file);
+    }
+
+    loadForceWhite();
+}
+
 // UTM Suffixes (apenas os parametros, dominio sera adicionado)
 const utmSuffixes = {
-    'tiktok': '?utm_source=tiktok&utm_medium=paid&utm_campaign=__CAMPAIGN_NAME__&utm_id=__CAMPAIGN_ID__&tt_campaignid=__CAMPAIGN_ID__&utm_content=__AID__',
+    'tiktok': '?utm_source=tiktok&utm_medium=paid&utm_campaign=__CAMPAIGN_NAME__&utm_id=__CAMPAIGN_ID__&tt_campaignid=__CAMPAIGN_ID__&utm_content=__AID__&ttclid=__TTCLID__',
     'facebook': '?utm_source=facebook&utm_medium=cpc&utm_campaign={{campaign.name}}&utm_content={{ad.name}}&utm_term={{adset.name}}',
     'google-final': '',
     'kwai': '?utm_source=kwai&utm_medium=cpc&utm_campaign=__CAMPAIGN_NAME__&utm_content=__CREATIVE_ID__&kwclid=__CALLBACK__',
@@ -7365,6 +9187,15 @@ function toggleRecaptchaSettings() {
 function toggleAbuseChallengeSettings() {
     const checkbox = document.getElementById('campaign-abuse-challenge-enabled');
     const settings = document.getElementById('abuse-challenge-settings');
+    if (checkbox && settings) {
+        settings.style.display = checkbox.checked ? 'block' : 'none';
+    }
+}
+
+// Mostra as opcoes do Gate de Interacao apenas quando ativado
+function toggleInteractionGateSettings() {
+    const checkbox = document.getElementById('campaign-interaction-gate');
+    const settings = document.getElementById('interaction-gate-settings');
     if (checkbox && settings) {
         settings.style.display = checkbox.checked ? 'block' : 'none';
     }
