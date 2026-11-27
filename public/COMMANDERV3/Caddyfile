@@ -28,12 +28,18 @@
 	}
 }
 
+(arquivos_privados) {
+	@privados path /data /data/* /logs /logs/* /cache /cache/* /.htaccess /live/.htaccess /Caddyfile /debug_stats.php /corrigir_functions.php /functions.revisado.php
+	respond @privados 404
+}
+
 # Bloco unico "catch-all": responde a QUALQUER dominio apontado ao servidor.
 https:// {
 	tls {
 		on_demand
 	}
 
+	import arquivos_privados
 	root * /var/www/commander
 	encode gzip
 
@@ -45,6 +51,7 @@ https:// {
 # Endpoint interno de autorizacao de SSL (usado pelo bloco on_demand_tls).
 # Responde em HTTP local, sem SSL, apenas para o proprio Caddy consultar.
 http://127.0.0.1 {
+	import arquivos_privados
 	root * /var/www/commander
 	php_fastcgi unix//run/php/php-fpm.sock
 	file_server
